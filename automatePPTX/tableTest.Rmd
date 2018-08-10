@@ -1,0 +1,22 @@
+---
+title: "Untitled"
+author: "William Wang"
+date: "8/9/2018"
+output: powerpoint_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(knitr)
+setwd("~/GitHub/automatePPTX")
+source("createTable.R")
+```
+
+
+```{r cars, echo = TRUE}
+df <- getTables()
+kable(df)
+```
+
+
+

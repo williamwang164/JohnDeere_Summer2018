@@ -1,0 +1,10 @@
+
+*.png
+*.pptx
+*.html
+*.csv
+*.xlsx
+slideImages/.Rhistory
+*.pdf
+*.tex
+*.log

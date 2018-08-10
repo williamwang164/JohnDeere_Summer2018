@@ -1,0 +1,808 @@
+---
+title: "Machine Summary Reporting"
+author: "William Wang"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+    toc: true
+    toc_depth: 4
+---
+
+## Purpose
+
+The following documents the Machine Summary Reporting code base. 
+
+## About
+
+The current iteration compares real harvester data, gathered from select John Deere associates, to simulated harvester data. The summary report focuses on specific metrics visualized in a tabular and graphical manner. These areas are:
+
+* Harvesting Performance Scores
+* Harvesting Performance Engineering Units
+* Power Summaries
+* Agronomic & Output Summaries
+
+
+## Generating the Report
+
+The following section will document the processess to generate the Machine Summary Report.
+
+### Rmd, R, and Support files
+
+To generate reports, the `machineSummaryReport.Rmd` file will need to be within the same folder as the `src/` folder and the `header.tex` latex file. Furthermore, please verify that within the `src/` folder it contains:
+
+* `plotUtil.R`
+* `tableUtil.R`
+* `units.R`
+* `versatility.R`
+
+### Input File Preparations
+
+Before any report summary can be generated, the input `.csv` files need to be prepared. Please refer to the Simulation Toolchain Visio Diagram located on Intelligent Combine server for the input `.csv` process.
+
+### Yaml
+
+The only significant change needed to be made to the `machineSummaryReport.Rmd` file is the Yaml header. The Yaml header is as follows:
+
+```yaml
+---
+output:
+  pdf_document:
+    includes:
+      in_header: header.tex
+    fig_width: 25
+    fig_height: 25
+classoption: landscape
+geometry: margin=2cm
+params:
+  pc: 0.8
+  dpc: 0.98
+  file1: 
+  file2: 
+  file3: //iso19prod/IntelligentCombine/HA/ISE/reports/data/sfcVarMapping.csv
+  tz: 
+---
+```
+Input the As Harvested `.csv` absolute file path to `file1:` and the Simulated `.csv` absolute file path to `file2:`. The `sfcVarMapping.csv` file can be found in the displayed `file3:` link. `sfcVarMapping.csv` is used to provide header names to the Simulation data. Please verify the location of this file. 
+
+Additionally, `tz` specifies the timezone of the reporting field. Please follow proper timezone code format of `posixtc` class objects. The following link is where you can find timezone codes: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones#List
+
+### Enviroment Verifications
+
+Please verify that you are using RStudio to edit and run the summary reporting code. If you do not have RStudio installed, please visit **JDSRS** or https://www.rstudio.com/ to download Rstudio. 
+
+After you have verified the installation of RStudio, please verify that you have `MikTex` insalled. `MikTex` is a `laTex` compiler which generates `pdf` files. To install `MikTex` please visit https://miktex.org/.
+
+Additionally, the sumamry report uses various packages. Please verify that you have installed the following packages:
+
+* knitr
+* tidyverse
+* dbplyr
+* tinytex
+* colorRamps
+* lknitr
+* kableExtra
+* gridExtra
+* grid
+* ggplot2
+* ggmap
+* ggpubr
+* scales
+* data.table
+* pander
+
+If you do not have one of these packages installed, please enter `install.packages("name")` into the RStudio console. Note that you will need to enter the name of the package within `""`.
+
+### Generating the Report
+To generate the report, click on the `knit` button (looks like a ball of blue yarn) loacated in RStudio. This will prompt RStudio to start generating the report. After RStudio finishes, the Machine Summary Report can be found at the same location where the `.Rmd` file is located in. As by convention, the `pdf` will share the same file name as the `.Rmd` file. It is good practice to always rename the `.Rmd` file to your desired `pdf` file name before generating. 
+
+---
+
+## The Code Itself 
+
+The following section will document the code itself and how the report is generated. 
+
+### machineSummaryReport.Rmd
+
+This is the main script which generates the summary report. The code is seperated in specific code segments. 
+
+#### Segment 1: Yaml header
+
+```yaml
+---
+output:
+  pdf_document:
+    includes:
+      in_header: header.tex
+    fig_width: 25
+    fig_height: 25
+classoption: landscape
+geometry: margin=2cm
+params:
+  pc: 0.8
+  dpc: 0.98
+  file1: 
+  file2: 
+  file3: 
+  tz: 
+---
+```
+It is crucial that the indentation of the yamal header is maintained. It is important to note that `pc` is the percent confidence used for map plots and `dpc:` is the density percent confidence for density plots. These values ensure good scaling of data. Depending on specific specifications, these values may change. Please consult with the team regarding the scaling changes. 
+
+The `classoption:` designate how the `laTex` enviroment. Due the fact that the summary report uses many map plots, the `landscape` option is used to maintain the aspect ratio and readability. 
+
+Feel free to change non `params:` values as it only effects layout and not the data. 
+
+#### Segment 2: File Input
+```r
+{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE, }
+asHarvest        <- read.csv(params$file1, header = TRUE, as.is = TRUE)
+simulatedHarvest <- read.csv(params$file2, header = FALSE, as.is = TRUE)
+headerNames      <- read.csv(params$file3, header = TRUE)
+
+names(simulatedHarvest) <- headerNames$AWS
+
+asHarvest        <- mutate(asHarvest, Source = "As Harvested")
+simulatedHarvest <- mutate(simulatedHarvest, Source = "Simulated")
+
+asHarvest[["time"]] <- NULL
+asHarvest[["Index"]] <- NULL
+
+asHarvest$hwu <- with(asHarvest, ifelse(is.na(hwu), hwi, hwu))
+
+bindedDF  <- rbind(asHarvest, simulatedHarvest)
+
+```
+
+The code above reads in the `.csv` files designated within the Yaml `params:` field. Note that after binding the two data frames, the `asHarvest` and `simulatedHarvest` data frames are still within the enviroment and are not removed. This is important since these two data frames will be used later on also. Also note that prior to binding the data frames, a `Source` column is added to the data frame to categorize the data. 
+
+#### Segment 2: Power Utilization
+
+```r
+model <- bindedDF$serialnumber %>% unique(.) %>% substr(., 4, 7) %>% unique(.)
+
+maxPower <- case_when(
+  model == "S660" ~ 249,
+  model == "S670" ~ 292,
+  model == "S680" ~ 353,
+  model == "S685" ~ 373,
+  model == "S690" ~ 405,
+  TRUE ~ as.numeric(NA)
+)
+
+bindedDF <- bindedDF %>%
+  mutate(., pu = ep/maxPower * 100)
+```
+
+The code above calculates the power utilization for the data frame. Currently the report supports models:
+
+* S660
+* S670
+* S680
+* S685
+* S690
+
+If your specific harvester model is not listed, please consult with the team for the power rating of your specific harvester. 
+
+#### Segment 3-4: Summary Tables
+
+```r
+#Harvest Performance Scores (AKA HPS)
+#  overall performance, grain productivity, power utalization, fuel Economy, grain
+#  saving
+
+hpsTable <-
+  createHPS(bindedDF)
+
+#Harvesting Performance - Engineering Units (AKA HPEU)
+# Grain Prod, Power Util, Fuel Econ, Total Loss
+
+hpeuTable <-
+  createHPEU(bindedDF)
+
+#Power Summary (AKA PS)
+# Engine Harv, Eng Harv and UL, Avg Harv Specific Pwr, Propulsion Power
+# !NOTE!: engineHarvesting Metric only looks at machine state 5! 
+psTable <-
+  createPS(bindedDF)
+
+engineHarvesting <- bindedDF %>%
+  dplyr::filter(ms == 5) %>%
+  dplyr::group_by(serialnumber, Source) %>%
+  dplyr::summarise(EngineHarv = mean(ep, na.rm = TRUE))
+
+psTable$EngineHarv <- engineHarvesting$EngineHarv
+
+# agronomic and output summary (AKA AOS)
+# Avg Harvest Speed, Harv Area, Avg Yield
+aosTable <-
+  createAOS(bindedDF)
+
+```
+
+The code above creates summary data frames, **data frames** not tables, for each performance metric group. To create these data frames, this heavily relies on the `tableUtil.R` file located in the `src/` folder. This file will be discussed later on. Please note that for the **Performance Summary** data frame, engineHarvesting Metric only looks at machine state 5 thus required a separate calculation. 
+
+Directly following this code segment is:
+
+```r
+# Rename the column names for better output readability
+
+names(hpsTable) <- c("Machine",  "Overall Performance", "Grain Productivity", "Power Utilization", "Fuel Economy", "Grain Saving")
+
+names(hpeuTable) <- c("Machine", "Grain Prod (t/h)", "Power Utl (%)", "Fuel Econ (1/t)")
+
+names(psTable) <- c("Machine", "Engine Harv (kW)", "Eng Harv & Utl (kW)", "Avg Harv Specific Pwr (kW/t/h)", "Propulsion Power (kW)")
+
+names(aosTable) <- c("Machine", "Avg Harvest Speed (km/h)", "Harv Area (ha)", "Avg Yield (t/ha)")
+```
+
+This is used to rename the column names for better readability. 
+
+#### Segment 5-8: Table Output
+The following few segments, 5-8, have the same logic. Since there is a field summary report code in addition to this machine summary report, the logic is identical in both files. To output the tables, the `kable()` function located in `knitr` package is used alongised functions within the `kable.extra` package. The following is a generic example to output the table:
+
+```r
+{r, results = "asis"}
+output<- kable(aosTable, digits = 1, "latex", booktabs = TRUE)
+rnum <- 1
+for(i in seq_along(machines)){
+  output <- output %>% 
+    group_rows(machines[i], rnum, rnum + 1)
+  rnum <- rnum + 2
+}
+
+output
+```
+
+**!NOTE!: results must be set to "asis" for the table to be displayed!**
+
+As mentioned above, this code example will exist within both the machine and field reporting code. Thus the `for` loop is not critical to the machine summary reporting. However, the logic is flexible to accomodate both reports. The idea of the for loop was to group the rows by machine names thus providing a reader friendly layout. 
+
+The statement `output<- kable(aosTable, digits = 1, "latex", booktabs = TRUE)` is the only thing that changes for each table. Simply change `aosTable` with any other summary data frame to create and output the table.
+
+#### Segment 12-22: Plots
+
+The following is a generic plot segment example: 
+
+```r
+plotAsHarvest <- plotMap(map, bindedDF, "gpssp", params$pc)
+
+plotDensity <- plotDens(
+  df = bindedDF, 
+  item = "gpssp", 
+  pc = params$dpc, 
+  label = "Ground Speed, kph")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(2,2,2,2,2,2),
+                                   c(2,2,2,2,2,2)))
+```
+
+Both functions `plotMap()` and `plotDens()` can be found in the `plotUtil.R` file. It is important to note that `grid.arrange()` uses the `layout_matrix`. Please refer to `ggplot2` documentations for any plotting help. 
+
+#### Segment 23-24: Versatility
+
+The following calculates the local time from the GPS time:
+
+```r
+# Convert GPS time to field time to prepare for Versatility Calculations
+
+df <- asHarvest
+df$Source <- "As Harvested"
+df$DateTime <- with(df,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = params$tz)
+)
+
+df2 <- simulatedHarvest
+df2$Source <- "Simulated"
+df2$DateTime <- with(df2,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = params$tz)
+)
+
+df <- rbind(df, df2)
+df <- df %>% dplyr::filter(., ms == 4 | ms == 5)
+df$dateCode <-  strftime(df$DateTime, format = "%Y-%m-%d" )
+```
+
+Please note the fact that in addition to the time calculation, a `dateCode` column is created and will be used for versatility purposes. 
+
+The following code displays the versatility sections:
+
+```r
+{r title, results='asis', fig.width=8, fig.height=3}
+# The following are versatility table output and time vs metric plotting
+# The for-loops are used to create versatility pages for each unique date
+
+for( i in unique(df$dateCode)){
+  cat("\\pagebreak")
+  
+  VersDF <- df %>% 
+    dplyr::filter(., dateCode == i)
+  VersDF$time <- VersDF$DateTime
+  VersDF$model_year <- substr(VersDF$serialnumber, 10, 10)
+  VersDF$model <- VersDF$serialnumber %>% substr(., 4, 7)
+  VersDF$machine_name <- VersDF$Source
+  
+  p1 <- ggplot(VersDF, aes(x = DateTime, y = pro, colour = Source)) +
+    geom_smooth( method = "loess", method.args = list(degree = 2), size = 1.75, se = FALSE, span = 0.33) +
+    coord_cartesian(ylim=c(0, 100) + c(0,1)) +
+    timeTheme() +
+    labs(x = "Time", y = "Grain Productivity, t/h")
+  
+  pandoc.header(paste("Grain Productivity", i, sep = " "), level=2)
+  
+  vtab <- get_versatility_tbl(unique(bindedDF$field)[1], "pro", VersDF)
+  
+  print(p1)
+  
+  cat(vtab[1], "\n")
+  cat(vtab[2], "\n")
+  
+  
+}
+
+for( i in unique(df$dateCode)){
+  cat("\\pagebreak")
+  
+  VersDF <- df %>% 
+    dplyr::filter(., dateCode == i)
+  VersDF$time <- VersDF$DateTime
+  VersDF$model_year <- substr(VersDF$serialnumber, 10, 10)
+  VersDF$model <- VersDF$serialnumber %>% substr(., 4, 7)
+  VersDF$machine_name <- VersDF$Source
+  
+  p1 <- ggplot(VersDF, aes(x = DateTime, y = gpscore, colour = Source)) +
+    geom_smooth( method = "loess", method.args = list(degree = 2), size = 1.75, se = FALSE, span = 0.33) +
+    coord_cartesian(ylim=c(0, 100) + c(0,1)) +
+    timeTheme() +
+    labs(x = "Time", y = "Grain Productivity Score")
+  pandoc.header(paste("Grain Productivity Score", i, sep = " "), level=2)
+  vtab <- get_versatility_tbl(unique(bindedDF$field)[1], "gpscore", VersDF)
+  
+  print(p1)
+  
+  cat(vtab[1], "\n")
+  cat(vtab[2], "\n")
+  
+  
+}
+```
+**!NOTE!: title and resultes="asis" must be included for proper output!**
+
+Since there are data sets where machines ran accross multiple days, the `for` loop uses the `dateCode` calculated to segment the versatility reporting by days. 
+
+To title each new page, the `pandoc.header()` function from `pander` package is used. This must be used in conjunction with `title` in the code chunk options. 
+
+### `src/` Scripts
+
+The following documents the contents of each `src/` scripts. 
+
+#### tableUtil.R
+
+```r
+# Author: William Wang
+#         Summer 2018 John Deere Intern
+#
+# This source file contains functions which pertain to:
+#   Data filter functions
+#   --These functions help with the creation of summary
+#     tables.
+#   Creation of summary tables
+#   --These functions are coded to accomodate creating
+#     tables for a variable ammount of unique machines
+#======================================================
+
+#======================================================
+# Template
+#     The following is a template of how to create table
+#     functions
+
+filtTemplate <- function(df){
+#--------------------------------------------------------------------------------------------- 
+# Purpose:      Summarises data to be visualized in table form
+#        df:    Data frame with only one unique machine categorized
+#               by Source ("As Harvest", "Simulated") and contains 
+#               all variable/columns of interest
+# Output:
+#        table: A data frame containing summarised metrics
+#--------------------------------------------------------------------------------------------- 
+
+  table <- df %>% 
+    dplyr::filter(ms == 4 | ms == 5) %>%        # Filter desired machine states
+    dplyr::group_by(Source) %>%                 # Group data by Source
+    dplyr::summarise(                           # Sumarise data                         
+        metric1 = mean(variable1, na.rm = TRUE),
+        metric2 = mean(variable2, na.rm = TRUE),
+        metric3 = mean(variable3, na.rm = TRUE),
+        metric4 = mean(variable4, na.rm = TRUE),
+        metric5 = mean(variable5, na.rm = TRUE)
+    )
+  
+  return(table)
+}
+
+createTemplate <- function(df){
+#--------------------------------------------------------------------------------------------- 
+# Purpose:      Create table summarizing all of the data grouped by machine
+#        df:    Data frame with only all machines categorized
+#               by Source ("As Harvest", "Simulated") and contains 
+#               all variable/columns of interest
+# Output:
+#        table: A data frame containing summarised metrics for all machines
+#--------------------------------------------------------------------------------------------- 
+  
+  serialNumbers <- unique(df$serialnumber)  # Get all of the machines within the df                    
+  
+  i <- 1  # Counter designating the current machine, currently 1 (First/Start)
+  # Create the table for the first machine
+  table <- filtTemplate(df %>% filter(serialnumber == serialNumbers[i]))
+  
+  i <- i + 1  # Machine 1 is finished, increment the machine counter
+  
+  while( i <= length(serialNumbers)){ # If there are more than 1 machine, continue creating tables
+    # Bind/Append each newly created table to the output table
+    table <- rbind(table, filtTemplate(df %>% filter(serialnumber == serialNumbers[i])))
+    i <- i + 1 # increment the machine counter
+  }
+  
+  #!NOTE!: This is essentially a DO-While loop since R does not support DO-While grammar
+  return(table)
+}
+#======================================================
+
+
+#======================================================
+# Summary Table Functions:
+
+filtHPS <- function(df){
+  df %>% dplyr::filter(ms == 4 | ms == 5) %>% dplyr::group_by(Source) %>% dplyr::summarise(
+    Performance = mean(opscore, na.rm = TRUE),
+    Productivity = mean(gpscore, na.rm = TRUE),
+    Power = mean(puscore, na.rm = TRUE),
+    Fuel = mean(fescore, na.rm = TRUE),
+    Grain = mean(glscore, na.rm = TRUE)
+  )
+}
+
+createHPS <- function(df){
+  serialNumbers <- unique(df$serialnumber)
+  i <- 1
+  table <- filtHPS(df %>% filter(serialnumber == serialNumbers[i]))
+  i <- i + 1
+  
+  while( i <= length(serialNumbers)){
+    table <- rbind(table, filtHPS(df %>% filter(serialnumber == serialNumbers[i])))
+    i <- i + 1
+  }
+  
+  return(table)
+}
+
+filtHPEU <- function(df){
+  df %>%
+    dplyr::filter(ms == 4 | ms == 5) %>%
+    dplyr::group_by(Source) %>%
+    dplyr::summarise(
+      GrainProd = mean(pro, na.rm = TRUE),
+      PowerUtil = mean(pu, na.rm = TRUE),
+      FuelEcon = mean(fcih, na.rm = TRUE)
+    )
+}
+
+createHPEU <- function(df){
+  serialNumbers <- unique(df$serialnumber)
+  i <- 1
+  table <- filtHPEU(df %>% filter(serialnumber == serialNumbers[i]))
+  i <- i + 1
+  
+  while( i <= length(serialNumbers)){
+    table <- rbind(table, filtHPEU(df %>% filter(serialnumber == serialNumbers[i])))
+    i <- i + 1
+  }
+  
+  return(table)
+}
+
+filtPS <- function(df){
+  df %>%
+    dplyr::filter(ms == 4 | ms == 5 ) %>%
+    dplyr::group_by(Source) %>%
+    dplyr::summarise(
+      EngineHarv = mean(ep, na.rm = TRUE),
+      EngineHarvUL = mean(ep, na.rm = TRUE),
+      AvgHarvSpecificPwr = mean(ifelse(pro == 0, NA, ep/pro), na.rm = TRUE),
+      PropulsionPower = mean(pp, na.rm = TRUE)
+    )
+}
+
+createPS <- function(df){
+  serialNumbers <- unique(df$serialnumber)
+  i <- 1
+  table <- filtPS(df %>% filter(serialnumber == serialNumbers[i]))
+  i <- i + 1
+  
+  while( i <= length(serialNumbers)){
+    table <- rbind(table, filtPS(df %>% filter(serialnumber == serialNumbers[i])))
+    i <- i + 1
+  }
+  
+  return(table)
+
+}
+
+filtAOS <- function(df){
+  df %>% 
+    dplyr::filter(ms == 4 | ms == 5) %>% 
+    dplyr::group_by(Source) %>% 
+    dplyr::summarize(
+      HarvestSpeed = mean(gpssp, na.rm = TRUE),
+      HarvestArea = sum(gpssp * pmin(hwu, hwi, na.rm = TRUE) / 36000, na.rm = TRUE),
+      AvgYield = mean(yield, na.rm = TRUE)
+    )
+}
+
+createAOS <- function(df){
+  serialNumbers <- unique(df$serialnumber)
+  i <- 1
+  table <- filtAOS(df %>% filter(serialnumber == serialNumbers[i]))
+  i <- i + 1
+  
+  while( i <= length(serialNumbers)){
+    table <- rbind(table, filtAOS(df %>% filter(serialnumber == serialNumbers[i])))
+    i <- i + 1
+  }
+  
+  return(table)
+}
+
+#======================================================
+
+```
+
+####  plotUtil.R
+```r
+# Author: William Wang
+# 
+# This source file contains functions which pertain to:
+#   Scaling limits for map plots
+#   Scaling Limits for density plots
+#   Theme for map plots
+#   Theme for density plots
+#   Theme for one page plots
+#   Plotting functions
+#======================================================
+
+
+#======================================================
+# Utility functions for Plots
+#======================================================
+
+
+limitVar <- function(df, item, pc){
+#--------------------------------------------------------------------------------------------- 
+# Purpose:      Normalizes data by eliminating extreme values falling outside of the percent
+# Inputs:
+#        df:    A binded data frame containing all variables from files categorized by Source
+#               eg. Source == "As Harvested" || Source == "Simulated"
+#        item:  A name for a column in df, eg. "gpssp"
+#        pc:    The percent confidence in decimal form, eg. 0.8
+# Output:
+#        data:  A data frame containing lon, lat, minZ, maxZ, var2 and Source
+#               - lon, lat:   used for ploting maps as x,y axis
+#               - minZ, maxZ: used as limits
+#               - var2:       normalized data from "item" column 
+#               - Source:     used for facet wrapping
+#---------------------------------------------------------------------------------------------               
+
+  data <- data.frame(lon = df$lon, lat = df$lat, var = df[[item]], Source = df$Source)
+  
+  data$minZ <- with(data, quantile(var, 1 - pc, na.rm = TRUE))
+  data$maxZ <- with(data, quantile(var, pc, na.rm = TRUE))
+  
+  data$var2 <- with(data, ifelse(var < minZ, minZ, var))
+  data$var2 <- with(data, ifelse(var2 > maxZ, maxZ, var2))
+  
+  return(data)
+}
+
+
+
+densLimit <- function(df, item, pc){
+#--------------------------------------------------------------------------------------------- 
+# Purpose:      Calculates the limits to within the percent confidence to scale density plots
+# Inputs:
+#        df:    A binded data frame containing all variables from files categorized by Source
+#               eg. Source == "As Harvested" || Source == "Simulated"
+#        item:  A name for a column in df, eg. "gpssp"
+#        pc:    The percent confidence in decimal form, eg. 0.8
+# Output:
+#        data:  A data frame containing var, Source, minZ, maxZ
+#               -var:       the column/variable of interest
+#               -Source:    used to identifty data source
+#               -minZ,maxZ: used to limit the density plot data within percent confidence
+#--------------------------------------------------------------------------------------------- 
+
+  data <- data.frame(var = df[[item]], Source = df$Source)
+  data$minZ <- with(data, quantile(var, 1 - pc, na.rm = TRUE))
+  data$maxZ <- with(data, quantile(var, pc, na.rm = TRUE))
+  return(data)
+}
+
+densTheme <- function(base_size = 20){
+#--------------------------------------------------------------------------------------------- 
+# Purpose:      Provides theme for density plots
+# Inputs:
+#        base_size: max size for text, default is 20pt 
+#--------------------------------------------------------------------------------------------- 
+  
+  theme(
+    axis.line =         element_blank(),
+    axis.text.x =       element_text(size = base_size, lineheight = 0.9, vjust = 1),
+    axis.text.y =       element_text(size = base_size, lineheight = 0.9, hjust = 1),
+    axis.ticks =        element_line(colour = "black", size = 0.2),
+    axis.title.x =      element_text(size = base_size, vjust = 1),
+    axis.title.y =      element_text(size = base_size, angle = 90, vjust = 0.5),
+    axis.ticks.length = unit(0.3, "lines"),
+    axis.ticks.margin = unit(0.5, "lines"),
+    
+    legend.background = element_rect(colour=NA), 
+    legend.key =        element_rect(colour = "grey80"),
+    legend.key.size =   unit(1.2, "lines"),
+    legend.text =       element_text(size = base_size),
+    legend.title =      element_blank(),
+    legend.position =   "right",
+    
+    panel.background =  element_rect(fill = "white", colour = NA), 
+    panel.border =      element_rect(fill = NA, colour="grey50"), 
+    panel.grid.major =  element_line(colour = "grey90", size = 0.2),
+    panel.grid.minor =  element_line(colour = "grey98", size = 0.5),
+    panel.margin =      unit(0.25, "lines"),
+    
+    strip.background =  element_rect(fill = "grey80", colour = "grey50"), 
+    strip.text.x =      element_text(size = base_size * 0.8),
+    strip.text.y =      element_text(size = base_size * 0.8, angle = -90),
+    
+    plot.background =   element_rect(colour = NA),
+    plot.title =        element_text(size = base_size * 1.2),
+    plot.margin =       unit(c(1, 1, 0.5, 0.5), "lines")
+  )
+}
+
+
+
+onePlot <- function(){
+#--------------------------------------------------------------------------------------------- 
+# Purpose:      Provides theme for plots that take up the whole page
+#--------------------------------------------------------------------------------------------- 
+  
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 25),
+    axis.title = element_text(size = 30),
+    axis.text = element_text(size = 20),
+    panel.background =  element_rect(fill = "white", colour = NA), 
+    panel.border =      element_rect(fill = NA, colour="grey50"), 
+    panel.grid.major =  element_line(colour = "grey90", size = 0.2),
+    panel.grid.minor =  element_line(colour = "grey98", size = 0.5),
+    panel.margin =      unit(0.25, "lines") 
+  )
+}
+
+
+
+mapTheme <- function(){
+#--------------------------------------------------------------------------------------------- 
+# Purpose:      Provides theme for ggmap plots with facet wraps
+#--------------------------------------------------------------------------------------------- 
+  
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 20),
+    axis.ticks = element_blank(),
+    axis.text  = element_blank(),
+    axis.title = element_blank(),
+    strip.text.x = element_text(size = 40, face = "bold")
+  )
+}
+
+timeTheme <- function(){
+#--------------------------------------------------------------------------------------------- 
+# Purpose:      Provides theme for time plots in the versatility section
+#--------------------------------------------------------------------------------------------- 
+  
+  theme(
+    panel.background =  element_rect(fill = "white", colour = NA), 
+    panel.border =      element_rect(fill = NA, colour="grey50"), 
+    panel.grid.major =  element_line(colour = "grey90", size = 0.2),
+    panel.grid.minor =  element_line(colour = "grey98", size = 0.5),
+    panel.margin =      unit(0.25, "lines") 
+  )
+}
+
+#======================================================
+# Plotting functions                                  
+#======================================================
+
+
+plotMap <- function(map, df, item, pc, score = FALSE){
+#--------------------------------------------------------------------------------------------- 
+# Purpose:      plots maps 
+# Inputs:
+#        map:   map for ggmap to plot
+#        mapDF: data frame from limitVar function
+#        pc:    The percent confidence in decimal form, eg. 0.8
+#        score: If the item to plot will be a score
+# Output:       the plot object
+#--------------------------------------------------------------------------------------------- 
+  
+  if(score){
+    scoreDF  <- data.frame(lon = df$lon, lat = df$lat, Source = df$Source, var = df[[item]])
+    mapPlot <- ggmap(map) +
+      geom_point(data = scoreDF,aes(x = lon, y = lat, colour = var)) +
+      scale_colour_gradientn(limits = c(0, 100),
+                             colours = matlab.like(64),
+                             guide = guide_colorbar(barwidth = unit(.45, "npc"))) +
+      scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+      scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+      facet_wrap(~ Source) +
+      mapTheme()
+    
+  } else{
+    
+    mapDF <- limitVar(df, item, pc)
+    mapPlot <- ggmap(map) +
+      geom_point(data = mapDF, aes(x = lon, y = lat, colour = var2)) +
+      scale_colour_gradientn(
+        limits = c(mapDF$minZ[1]-1, mapDF$maxZ[1]+1),
+        colours = matlab.like(64),
+        guide = guide_colorbar(barwidth = unit(0.45, "npc"))
+      ) +
+      scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+      scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+      facet_wrap(~ Source) +
+      mapTheme()
+  }
+  
+  return(mapPlot)
+}
+
+
+plotDens <- function(df, item, pc, label, score = FALSE){
+#--------------------------------------------------------------------------------------------- 
+# Purpose:      plots density maps
+# Inputs:
+#        df:    binded df with data from all sources
+#        item:  A name for a column in df, eg. "gpssp"
+#        pc:    The percent confidence in decimal form, eg. 0.92
+#        label: a string to label the x axis of the density plot
+# Output:       the plot object
+#--------------------------------------------------------------------------------------------- 
+  
+  if(score){
+    scoreDF  <- data.frame(Source = df$Source, var = df[[item]])
+    ggplot(data = scoreDF) +
+      geom_density(aes(x = var, color = Source), size = 2) +
+      densTheme() +
+      labs(x = label) +
+      scale_x_continuous(limits = c(0, 100) ) +
+      geom_hline(yintercept = 0, size = 2, colour = "gray")
+    
+  } else{ 
+    densDF <- densLimit(df, item, params$dpc)
+    ggplot(data = densDF) +
+      geom_density(aes(x = var, color = Source), size = 1.5) +
+      scale_x_continuous(limits = c(densDF$minZ[1], densDF$maxZ[1]), expand = c(0, 0))+
+      densTheme() +
+      labs( x = label) +
+      geom_hline(yintercept = 0, size = 2, colour = "gray")
+  }
+}
+```

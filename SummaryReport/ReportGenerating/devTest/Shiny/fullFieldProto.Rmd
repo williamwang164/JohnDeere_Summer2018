@@ -1,0 +1,635 @@
+---
+output:
+  pdf_document:
+    includes:
+      in_header: header.tex
+    fig_width: 25
+    fig_height: 25
+classoption: landscape
+geometry: margin=2cm
+params:
+  pc: 0.8
+  dpc: 0.98
+  hFiles: NA
+  sFiles: NA
+  hNames: //iso19prod/IntelligentCombine/HA/ISE/reports/data/sfcVarMapping.csv
+  file1: //iso19prod/IntelligentCombine/HA/ISE/reports/data/results/Kuhburg/020-1_KUHBURG_WW-1Z0S685AKFM094700-HA.csv
+  file2: //iso19prod/IntelligentCombine/HA/ISE/reports/data/results/Kuhburg/020-1_KUHBURG_WW-1Z0S685AAFM094704-HA.csv
+  file3: //iso19prod/IntelligentCombine/HA/ISE/reports/data/results/Kuhburg/020-1_KUHBURG_WW-1Z0S685AVFM094684-HA.csv
+  path: '~/GitHub/SimToolChain/Merge/Kuhburg/WholeField/'
+  file4: 020-1_KUHBURG_WW-1Z0S685AKFM094700_MPC_EP90_PerfectPredictions_min-sim_processed.csv
+  file5: 020-1_KUHBURG_WW-1Z0S685AAFM094704_MPC_EP90_PerfectPredictions_min-sim_processed.csv
+  file6: 020-1_KUHBURG_WW-1Z0S685AVFM094684_MPC_EP90_PerfectPredictions_min-sim_processed.csv
+  file7: //iso19prod/IntelligentCombine/HA/ISE/reports/data/sfcVarMapping.csv
+  tz: "Canada/Central"
+---
+
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(comment=NA, echo=FALSE, warning=FALSE, message=FALSE)
+library(tidyverse)
+library(dbplyr)
+library(tinytex)
+library(colorRamps)
+library(knitr)
+library(kableExtra)
+library(gridExtra)
+library(grid)
+library(ggplot2)
+library(ggmap)
+library(ggpubr)
+library(scales)
+library(data.table)
+library(pander)
+source("src/versatility.R")
+source("src/plotUtil.R")
+source("src/tableUtil.R")
+
+```
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE, }
+# # Read in Files
+# 
+# harvFiles <- params$hFiles
+# i <- 1
+# asHarvest <- read.csv(paste(harvFiles$path[i]), header = TRUE, as.is = TRUE)
+# i <- i+1
+# while(i <= length(harvFiles$path)){
+#   asHarvest <- rbind(asHarvest, read.csv(paste(harvFiles$path[i]), header = TRUE, as.is = TRUE))
+#   i <- i+1
+# }
+# 
+# simFiles <- params$sFiles
+# i <- 1
+# simulatedHarvest <- read.csv(paste(simFiles$path[i]), header = FALSE, as.is = TRUE)
+# i <- i+1
+# while(i <= length(simFiles$path)){
+#   simulatedHarvest <- rbind(simulatedHarvest, read.csv(paste(simFiles$path[i]), header = FALSE, as.is = TRUE))
+#   i <- i+1
+# }
+# remove(i)
+# 
+# headerNames      <- read.csv(params$hNames, header = TRUE)
+# names(simulatedHarvest) <- headerNames$AWS
+# 
+# asHarvest        <- mutate(asHarvest, Source = "As Harvested")
+# simulatedHarvest <- mutate(simulatedHarvest, Source = "Simulated")
+# 
+# asHarvest$hwu <- with(asHarvest, ifelse(is.na(hwu), hwi, hwu))
+# asHarvest[["time"]] <- NULL
+# asHarvest[["Index"]] <- NULL
+# bindedDF  <- rbind(asHarvest, simulatedHarvest)
+```
+
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE, }
+# Read in files
+setwd(params$path)
+asHarvest        <- read.csv(params$file1, header = TRUE, as.is = TRUE)
+asHarvest        <- rbind(asHarvest, read.csv(params$file2, header = TRUE, as.is = TRUE))
+asHarvest        <- rbind(asHarvest, read.csv(params$file3, header = TRUE, as.is = TRUE))
+simulatedHarvest <- read.csv(params$file4, header = FALSE, as.is = TRUE)
+simulatedHarvest <- rbind(simulatedHarvest, read.csv(params$file5, header = FALSE, as.is = TRUE))
+simulatedHarvest <- rbind(simulatedHarvest, read.csv(params$file6, header = FALSE, as.is = TRUE))
+
+headerNames      <- read.csv(params$file7, header = TRUE)
+names(simulatedHarvest) <- headerNames$AWS
+
+
+asHarvest        <- mutate(asHarvest, Source = "As Harvested")
+simulatedHarvest <- mutate(simulatedHarvest, Source = "Simulated")
+asHarvest[["time"]] <- NULL
+asHarvest[["Index"]] <- NULL
+
+# tidy the data before merging
+
+asHarvest$hwu <- with(asHarvest, ifelse(is.na(hwu), hwi, hwu))
+
+
+bindedDF  <- rbind(asHarvest, simulatedHarvest)
+```
+
+# Case Report for machine `r unique(bindedDF$serialnumber)`
+
+```{r}
+
+model <- bindedDF$serialnumber %>% unique(.) %>% substr(., 4, 7) %>% unique(.)
+
+maxPower <- case_when(
+  model == "S660" ~ 249,
+  model == "S670" ~ 292,
+  model == "S680" ~ 353,
+  model == "S685" ~ 373,
+  model == "S690" ~ 405,
+  TRUE ~ as.numeric(NA)
+)
+
+bindedDF <- bindedDF %>%
+  mutate(., pu = ep/maxPower * 100)
+```
+
+
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE}
+#Harvest Performance Scores (AKA HPS)
+#  overall performance, grain productivity, power utalization, fuel Economy, grain
+#  saving
+
+hpsTable <-
+  createHPS(bindedDF)
+
+#Harvesting Performance - Engineering Units (AKA HPEU)
+# Grain Prod, Power Util, Fuel Econ, Total Loss
+
+hpeuTable <-
+  createHPEU(bindedDF)
+
+#Power Summary (AKA PS)
+# Engine Harv, Eng Harv and UL, Avg Harv Specific Pwr, Propulsion Power
+psTable <-
+  createPS(bindedDF)
+
+engineHarvesting <- bindedDF %>%
+  dplyr::filter(ms == 5) %>%
+  dplyr::group_by(serialnumber, Source) %>%
+  dplyr::summarise(EngineHarv = mean(ep, na.rm = TRUE))
+
+psTable$EngineHarv <- engineHarvesting$EngineHarv
+
+# agronomic and output summary (AKA AOS)
+# Avg Harvest Speed, Harv Area, Avg Yield
+aosTable <-
+  createAOS(bindedDF)
+
+# Rename col names
+
+names(hpsTable) <- c("Machine",  "Overall Performance", "Grain Productivity", "Power Utilization", "Fuel Economy", "Grain Saving")
+
+names(hpeuTable) <- c("Machine", "Grain Prod (t/h)", "Power Utl (%)", "Fuel Econ (1/t)")
+
+names(psTable) <- c("Machine", "Engine Harv (kW)", "Eng Harv & Utl (kW)", "Avg Harv Specific Pwr (kW/t/h)", "Propulsion Power (kW)")
+
+names(aosTable) <- c("Machine", "Avg Harvest Speed (km/h)", "Harv Area (ha)", "Avg Yield (t/ha)")
+
+```
+
+# Overall Performance Summary
+
+## Field Harvesting Performance Summary
+
+### Harvesting Performance Scores
+
+```{r, results = "asis"}
+machines <- unique(bindedDF$serialnumber)
+
+output <- kable(hpsTable, digits = 0,"latex", booktabs = TRUE)
+
+rnum <- 1
+for(i in seq_along(machines)){
+  output <- output %>% 
+    group_rows(machines[i], rnum, rnum + 1)
+  rnum <- rnum + 2
+}
+
+output
+```
+
+### Harvesting Performance - Engineering Units
+
+```{r, results = "asis"}
+output <- kable(hpeuTable, digits = 1,"latex", booktabs = TRUE)
+rnum <- 1
+for(i in seq_along(machines)){
+  output <- output %>% 
+    group_rows(machines[i], rnum, rnum + 1)
+  rnum <- rnum + 2
+}
+
+output
+```
+
+### Power Summary
+
+```{r, results = "asis"}
+output <- kable(psTable, digits = 0, "latex", booktabs = TRUE)
+rnum <- 1
+for(i in seq_along(machines)){
+  output <- output %>% 
+    group_rows(machines[i], rnum, rnum + 1)
+  rnum <- rnum + 2
+}
+
+output
+```
+
+### Agronomic & Output Summary
+
+```{r, results = "asis"}
+output<- kable(aosTable, digits = 1, "latex", booktabs = TRUE)
+rnum <- 1
+for(i in seq_along(machines)){
+  output <- output %>% 
+    group_rows(machines[i], rnum, rnum + 1)
+  rnum <- rnum + 2
+}
+
+output
+```
+
+```{r}
+bindedDF <- bindedDF %>% dplyr::filter(., ms == 4 | ms == 5)
+```
+
+```{r}
+minX <- with(bindedDF, min(lon, na.rm = TRUE))
+maxX <- with(bindedDF, max(lon, na.rm = TRUE))
+minY <- with(bindedDF, min(lat, na.rm = TRUE))
+maxY <- with(bindedDF, max(lat, na.rm = TRUE))
+
+minX <- round(minX, 4) - 0.0001
+maxX <- round(maxX, 4) + 0.0001
+minY <- round(minY, 4) - 0.0001
+maxY <- round(maxY, 4) + 0.0001
+
+```
+
+
+```{r}
+# Calculate Zoom
+bindedDFZoom <- calc_zoom(lon, lat, bindedDF) - 1
+
+# Calculate Center of path
+bindedDFlon <- (max(bindedDF$lon) + min(bindedDF$lon))/2
+bindedDFlat <- (max(bindedDF$lat) + min(bindedDF$lat))/2
+
+# Get The Maps
+map <-
+  get_map(location = c(lon = bindedDFlon, lat = bindedDFlat),
+          zoom = bindedDFZoom, maptype = "satellite")
+
+bindedDFscale <-
+  data.frame(lat = c(min(bindedDF$lat), max(bindedDF$lat)),
+             lon = c(min(bindedDF$lon), max(bindedDF$lon)))
+```
+
+```{r}
+# Prepare separate dfs for plots
+simDF <- bindedDF %>% dplyr::filter(Source == "Simulated")
+harvDF <- bindedDF %>% dplyr::filter(Source == "As Harvested")
+
+
+
+```
+
+## As Harvested Ground Speed (GPSSP)
+
+```{r}
+
+# minZ   <- with(bindedDF, quantile(gpssp, 1 - params$pc, na.rm = TRUE))
+# maxZ   <- with(bindedDF, quantile(gpssp, params$pc, na.rm = TRUE))
+# 
+# bindedDF$gpssp2 <- with(bindedDF, ifelse(gpssp < minZ, minZ, gpssp))
+# bindedDF$gpssp2 <- with(bindedDF, ifelse(gpssp2 > maxZ, maxZ, gpssp2))
+
+mapDF <- limitVar(harvDF, "gpssp", params$pc)
+
+plotAsHarvest <- ggmap(map) +
+  geom_point(data = mapDF, aes(x = lon, y = lat, colour = var2)) +
+  scale_colour_gradientn(
+    limits = c(mapDF$minZ[1]-1, mapDF$maxZ[1]+1),
+    colours = matlab.like(64),
+    guide = guide_colorbar(barwidth = unit(0.45, "npc"))
+  ) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  mapTheme()
+
+rightPlot <- ggmap(map) +
+  geom_point(data = mapDF, aes(x = lon, y = lat, colour = var2)) +
+  scale_colour_gradientn(
+    limits = c(mapDF$minZ[1]-1, mapDF$maxZ[1]+1),
+    colours = matlab.like(64),
+    guide = guide_colorbar(barwidth = unit(0.45, "npc"))
+  ) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~serialnumber, ncol = 1) +
+  rightTheme()
+
+densLim <- densLimit(harvDF, "gpssp", params$dpc)
+
+plotDensity <- ggplot(data = harvDF) +
+  geom_density(aes(x = gpssp, color = serialnumber), size = 1.5) +
+  scale_x_continuous(limits = densLim, expand = c(0, 0))+
+  densTheme() +
+  labs(x = "Ground Speed, kph") +
+  geom_hline(yintercept = 0, size = 2, colour = "gray")
+
+grid.arrange(plotAsHarvest,
+             rightPlot,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,2,2,2),
+                                   c(1,1,1,2,2,2),
+                                   c(1,1,1,2,2,2),
+                                   c(1,1,1,2,2,2),
+                                   c(3,3,3,2,2,2),
+                                   c(3,3,3,2,2,2)))
+
+```
+
+## Simulated Ground Speed (GPSSP)
+
+```{r}
+mapDF <- limitVar(simDF, "gpssp", params$pc)
+
+plotAsHarvest <- ggmap(map) +
+  geom_point(data = mapDF, aes(x = lon, y = lat, colour = var2)) +
+  scale_colour_gradientn(
+    limits = c(mapDF$minZ[1]-1, mapDF$maxZ[1]+1),
+    colours = matlab.like(64),
+    guide = guide_colorbar(barwidth = unit(0.45, "npc"))
+  ) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  mapTheme()
+
+rightPlot <- ggmap(map) +
+  geom_point(data = mapDF, aes(x = lon, y = lat, colour = var2)) +
+  scale_colour_gradientn(
+    limits = c(mapDF$minZ[1]-1, mapDF$maxZ[1]+1),
+    colours = matlab.like(64),
+    guide = guide_colorbar(barwidth = unit(0.45, "npc"))
+  ) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~serialnumber, ncol = 1) +
+  rightTheme()
+
+densLim <- densLimit(simDF, "gpssp", params$dpc)
+
+plotDensity <- ggplot(data = simDF) +
+  geom_density(aes(x = gpssp, color = serialnumber), size = 1.5) +
+  scale_x_continuous(limits = densLim, expand = c(0, 0))+
+  densTheme() +
+  labs(x = "Ground Speed, kph") +
+  geom_hline(yintercept = 0, size = 2, colour = "gray")
+
+grid.arrange(plotAsHarvest,
+             rightPlot,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,2,2,2),
+                                   c(1,1,1,2,2,2),
+                                   c(1,1,1,2,2,2),
+                                   c(1,1,1,2,2,2),
+                                   c(3,3,3,2,2,2),
+                                   c(3,3,3,2,2,2)))
+
+```
+
+
+
+## As Harvested Fuel Consumption vs Grain Productivity
+
+```{r}
+yLim <- densLimit(harvDF, "fcih", params$dpc)
+xLim <- densLimit(harvDF, "pro", params$dpc)
+
+ggplot(data = harvDF, aes(x = pro, y = fcih, color = serialnumber), size = 2) +
+  scale_x_continuous(limits = xLim, expand = c(0, 0)) +
+  scale_y_continuous(limits = yLim, expand = c(0, 0)) +
+  geom_point( alpha=0.35) +
+  stat_density_2d(size = 1, contour = TRUE) +
+  onePlot() +
+  labs(x = "Grain Productivity, t/h", y = "Fuel Consumption, l/t")
+```
+
+## Simulated Fuel Consumption vs Grain Productivity
+
+```{r}
+yLim <- densLimit(simDF, "fcih", params$dpc)
+xLim <- densLimit(simDF, "pro", params$dpc)
+
+ggplot(data = simDF, aes(x = pro, y = fcih, color = serialnumber), size = 2) +
+  scale_x_continuous(limits = xLim, expand = c(0, 0)) +
+  scale_y_continuous(limits = yLim, expand = c(0, 0)) +
+  geom_point( alpha=0.35) +
+  stat_density_2d(size = 1, contour = TRUE) +
+  onePlot() +
+  labs(x = "Grain Productivity, t/h", y = "Fuel Consumption, l/t")
+```
+
+## As Harvested Overall Performance (OPSCORE)
+
+```{r}
+
+plotAsHarvest <- ggmap(map) +
+  geom_point(data = harvDF, aes(x = lon, y = lat, colour = opscore)) +
+  scale_colour_gradientn(
+    limits = c(0, 100),
+    colours = matlab.like(64),
+    guide = guide_colorbar(barwidth = unit(0.45, "npc"))
+  ) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  mapTheme()
+
+rightPlot <- ggmap(map) +
+  geom_point(data = harvDF, aes(x = lon, y = lat, colour = opscore)) +
+  scale_colour_gradientn(
+    limits = c(0, 100),
+    colours = matlab.like(64),
+    guide = guide_colorbar(barwidth = unit(0.45, "npc"))
+  ) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~serialnumber, ncol = 1) +
+  rightTheme()
+
+plotDensity <- ggplot(data = harvDF) +
+  geom_density(aes(x = opscore, color = serialnumber), size = 1.5) +
+  scale_x_continuous(limits = c(0,100), expand = c(0, 0))+
+  densTheme() +
+  labs(x = "Overall Performance, %") +
+  geom_hline(yintercept = 0, size = 2, colour = "gray")
+
+grid.arrange(plotAsHarvest,
+             rightPlot,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,2,2,2),
+                                   c(1,1,1,2,2,2),
+                                   c(1,1,1,2,2,2),
+                                   c(1,1,1,2,2,2),
+                                   c(3,3,3,2,2,2),
+                                   c(3,3,3,2,2,2)))
+```
+
+## Simulated Overall Performance (OPSCORE)
+
+```{r}
+
+plotAsHarvest <- ggmap(map) +
+  geom_point(data = simDF, aes(x = lon, y = lat, colour = opscore)) +
+  scale_colour_gradientn(
+    limits = c(0, 100),
+    colours = matlab.like(64),
+    guide = guide_colorbar(barwidth = unit(0.45, "npc"))
+  ) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  mapTheme()
+
+rightPlot <- ggmap(map) +
+  geom_point(data = simDF, aes(x = lon, y = lat, colour = opscore)) +
+  scale_colour_gradientn(
+    limits = c(0, 100),
+    colours = matlab.like(64),
+    guide = guide_colorbar(barwidth = unit(0.45, "npc"))
+  ) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~serialnumber, ncol = 1) +
+  rightTheme()
+
+plotDensity <- ggplot(data = simDF) +
+  geom_density(aes(x = opscore, color = serialnumber), size = 1.5) +
+  scale_x_continuous(limits = c(0,100), expand = c(0, 0))+
+  densTheme() +
+  labs(x = "Overall Performance, %") +
+  geom_hline(yintercept = 0, size = 2, colour = "gray")
+
+grid.arrange(plotAsHarvest,
+             rightPlot,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,2,2,2),
+                                   c(1,1,1,2,2,2),
+                                   c(1,1,1,2,2,2),
+                                   c(1,1,1,2,2,2),
+                                   c(3,3,3,2,2,2),
+                                   c(3,3,3,2,2,2)))
+```
+
+
+
+
+
+
+
+
+```{r}
+# Convert GPS time to field time to prepare for Versatility Calculations
+
+harvDF$DateTime <- with(harvDF,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = params$tz)
+)
+
+simDF$DateTime <- with(simDF,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = params$tz)
+)
+
+
+harvDF$dateCode <-  strftime(harvDF$DateTime, format = "%Y-%m-%d" )
+simDF$dateCode <-  strftime(simDF$DateTime, format = "%Y-%m-%d" )
+```
+
+
+```{r title, results='asis', fig.width=8, fig.height=3}
+# The following are versatility table output and time vs metric plotting
+# The for-loops are used to create versatility pages for each unique date
+
+for( i in unique(harvDF$dateCode)){
+  cat("\\pagebreak")
+  
+  VersDF <- harvDF %>% 
+    dplyr::filter(., dateCode == i)
+  VersDF$time <- VersDF$DateTime
+  VersDF$model_year <- substr(VersDF$serialnumber, 10, 10)
+  VersDF$model <- VersDF$serialnumber %>% substr(., 4, 7)
+  VersDF$machine_name <- VersDF$serialnumber
+  
+  p1 <- ggplot(VersDF, aes(x = DateTime, y = pro, colour = serialnumber)) +
+    geom_smooth( method = "loess", method.args = list(degree = 2), size = 1.75, se = FALSE, span = 0.33) +
+    coord_cartesian(ylim=c(0, 100) + c(0,1)) +
+    timeTheme() +
+    labs(x = "Time", y = "Grain Productivity, t/h")
+  
+  pandoc.header(paste("As Harvest Grain Productivity", i, sep = " "), level=2)
+  
+  vtab <- get_versatility_tbl(unique(bindedDF$field)[1], "pro", VersDF)
+  
+  print(p1)
+  
+  cat(vtab[1], "\n")
+  cat(vtab[2], "\n")
+  
+  
+  cat("\\pagebreak")
+  
+  VersDF <- simDF %>% 
+    dplyr::filter(., dateCode == i)
+  VersDF$time <- VersDF$DateTime
+  VersDF$model_year <- substr(VersDF$serialnumber, 10, 10)
+  VersDF$model <- VersDF$serialnumber %>% substr(., 4, 7)
+  VersDF$machine_name <- VersDF$serialnumber
+  
+  p1 <- ggplot(VersDF, aes(x = DateTime, y = pro, colour = serialnumber)) +
+    geom_smooth( method = "loess", method.args = list(degree = 2), size = 1.75, se = FALSE, span = 0.33) +
+    coord_cartesian(ylim=c(0, 100) + c(0,1)) +
+    timeTheme() +
+    labs(x = "Time", y = "Grain Productivity, t/h")
+  
+  pandoc.header(paste("Simulated Grain Productivity", i, sep = " "), level=2)
+  
+  vtab <- get_versatility_tbl(unique(bindedDF$field)[1], "pro", VersDF)
+  
+  print(p1)
+  
+  cat(vtab[1], "\n")
+  cat(vtab[2], "\n")
+  
+  
+}
+
+for( i in unique(harvDF$dateCode)){
+  cat("\\pagebreak")
+
+  VersDF <- harvDF %>%
+    dplyr::filter(., dateCode == i)
+  VersDF$time <- VersDF$DateTime
+  VersDF$model_year <- substr(VersDF$serialnumber, 10, 10)
+  VersDF$model <- VersDF$serialnumber %>% substr(., 4, 7)
+  VersDF$machine_name <- VersDF$serialnumber
+
+  p1 <- ggplot(VersDF, aes(x = DateTime, y = gpscore, colour = serialnumber)) +
+    geom_smooth( method = "loess", method.args = list(degree = 2), size = 1.75, se = FALSE, span = 0.33) +
+    coord_cartesian(ylim=c(0, 100) + c(0,1)) +
+    timeTheme() +
+    labs(x = "Time", y = "Grain Productivity Score")
+  pandoc.header(paste("As Harvest Grain Productivity Score", i, sep = " "), level=2)
+  vtab <- get_versatility_tbl(unique(bindedDF$field)[1], "gpscore", VersDF)
+
+  print(p1)
+
+  cat(vtab[1], "\n")
+  cat(vtab[2], "\n")
+
+
+  cat("\\pagebreak")
+
+  VersDF <- simDF %>%
+    dplyr::filter(., dateCode == i)
+  VersDF$time <- VersDF$DateTime
+  VersDF$model_year <- substr(VersDF$serialnumber, 10, 10)
+  VersDF$model <- VersDF$serialnumber %>% substr(., 4, 7)
+  VersDF$machine_name <- VersDF$serialnumber
+
+  p1 <- ggplot(VersDF, aes(x = DateTime, y = gpscore, colour = serialnumber)) +
+    geom_smooth( method = "loess", method.args = list(degree = 2), size = 1.75, se = FALSE, span = 0.33) +
+    coord_cartesian(ylim=c(0, 100) + c(0,1)) +
+    timeTheme() +
+    labs(x = "Time", y = "Grain Productivity Score")
+  pandoc.header(paste("Simulated Grain Productivity Score", i, sep = " "), level=2)
+  vtab <- get_versatility_tbl(unique(bindedDF$field)[1], "gpscore", VersDF)
+
+  print(p1)
+
+  cat(vtab[1], "\n")
+  cat(vtab[2], "\n")
+
+}
+```

@@ -1,0 +1,239 @@
+---
+output:
+  pdf_document:
+    includes:
+      in_header: header.tex
+    fig_width: 25
+    fig_height: 25
+classoption: landscape
+geometry: margin=2cm
+params:
+  pc: 0.8
+  dpc: 0.98
+  file1: //iso19prod/IntelligentCombine/HA/ISE/reports/data/results/Kuhburg/020-1_KUHBURG_WW-1Z0S685AAFM094704-HA.csv
+  path: '~/GitHub/SimToolChain/Merge/Kuhburg/'
+  file2: 020-1_KUHBURG_WW-1Z0S685AAFM094704_MPC_EP100_PerfectPredictions_min-sim_processed.csv
+  file3: //iso19prod/IntelligentCombine/HA/ISE/reports/data/sfcVarMapping.csv
+  tz: "Canada/Central"
+---
+
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(comment=NA, echo=FALSE, warning=FALSE, message=FALSE)
+library(tidyverse)
+library(dbplyr)
+library(tinytex)
+library(colorRamps)
+library(knitr)
+library(kableExtra)
+library(gridExtra)
+library(grid)
+library(ggplot2)
+library(ggmap)
+library(ggpubr)
+library(scales)
+library(data.table)
+library(pander)
+
+source("src/addVersatility.R")
+source("src/plotUtil.R")
+source("src/tableUtil.R")
+```
+
+
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE, }
+setwd(params$path)
+asHarvest        <- read.csv(params$file1, header = TRUE, as.is = TRUE)
+simulatedHarvest <- read.csv(params$file2, header = FALSE, as.is = TRUE)
+headerNames      <- read.csv(params$file3, header = TRUE)
+
+names(simulatedHarvest) <- headerNames$AWS
+
+asHarvest        <- mutate(asHarvest, Source = "As Harvested")
+simulatedHarvest <- mutate(simulatedHarvest, Source = "Simulated")
+asHarvest[["time"]] <- NULL
+asHarvest[["Index"]] <- NULL
+
+asHarvest$hwu <- with(asHarvest, ifelse(is.na(hwu), hwi, hwu))
+
+bindedDF  <- rbind(asHarvest, simulatedHarvest)
+```
+
+# Case Report for machine `r unique(bindedDF$serialnumber)`
+
+```{r}
+model <- bindedDF$serialnumber %>% unique(.) %>% substr(., 4, 7) %>% unique(.)
+
+maxPower <- case_when(
+  model == "S660" ~ 249,
+  model == "S670" ~ 292,
+  model == "S680" ~ 353,
+  model == "S685" ~ 373,
+  model == "S690" ~ 405,
+  TRUE ~ as.numeric(NA)
+)
+
+bindedDF <- bindedDF %>%
+  mutate(., pu = ep/maxPower * 100)
+```
+
+
+```{r}
+bindedDF <- bindedDF %>% dplyr::filter(., ms == 4 | ms == 5)
+```
+
+
+```{r}
+# Convert GPS time to field time to prepare for Versatility Calculations
+
+df <- asHarvest
+df$Source <- "As Harvested"
+df$DateTime <- with(df,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = params$tz)
+)
+
+asHarvFilt <- df %>% dplyr::filter(., ms == 4 | ms == 5)
+
+df2 <- simulatedHarvest
+df2$Source <- "Simulated"
+df2$DateTime <- with(df2,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = params$tz)
+)
+
+simHarvFilt <- df2  %>% dplyr::filter(., ms == 4 | ms == 5)
+
+df <- rbind(df, df2)
+df <- df %>% dplyr::filter(., ms == 4 | ms == 5)
+df$dateCode <-  strftime(df$DateTime, format = "%Y-%m-%d" )
+
+
+
+
+```
+
+```{r}
+
+startTime <- strptime("00:00:00", format = "%H:%M:%S")
+
+simHarvFilt$epoc <- startTime + as.numeric(row.names(simHarvFilt)) - 1
+asHarvFilt$epoc <- startTime + as.numeric(row.names(asHarvFilt)) - 1
+
+epocDF <- rbind(simHarvFilt, asHarvFilt)
+epocDF$dateCode <-  strftime(epocDF$DateTime, format = "%Y-%m-%d" )
+asHarvFilt <- asHarvFilt[1:dim(simHarvFilt)[1], ]
+filtDF <- rbind(asHarvFilt, simHarvFilt)
+filtDF$dateCode <-  strftime(filtDF$DateTime, format = "%Y-%m-%d" )
+
+```
+
+```{r title, results='asis', fig.width=8, fig.height=3}
+# The following are versatility table output and time vs metric plotting
+# The for-loops are used to create versatility pages for each unique date
+
+for( i in unique(df$dateCode)){
+  cat("\\pagebreak")
+  
+  VersDF <- epocDF %>% 
+    dplyr::filter(., dateCode == i)
+  VersDF$time <- VersDF$DateTime
+  VersDF$model_year <- substr(VersDF$serialnumber, 10, 10)
+  VersDF$model <- VersDF$serialnumber %>% substr(., 4, 7)
+  VersDF$machine_name <- VersDF$Source
+  
+  paramFiltDF <- filtDF %>% 
+    dplyr::filter(., dateCode == i)
+  paramFiltDF$time <- paramFiltDF$DateTime
+  paramFiltDF$model_year <- substr(paramFiltDF$serialnumber, 10, 10)
+  paramFiltDF$model <- paramFiltDF$serialnumber %>% substr(., 4, 7)
+  paramFiltDF$machine_name <- paramFiltDF$Source
+  
+  p1 <- ggplot(VersDF, aes(x = epoc, y = pro, colour = Source)) +
+    geom_smooth( method = "loess", method.args = list(degree = 2), size = 1.75, se = FALSE, span = 0.33) +
+    coord_cartesian(ylim=c(0, 100) + c(0,1)) +
+    timeTheme() +
+    labs(x = "Time", y = "Grain Productivity, t/h")
+  
+  pandoc.header(paste("Grain Productivity", i, sep = " "), level=2)
+  
+  vtab <- get_versatility_tbl(unique(bindedDF$field)[1], "pro", VersDF)
+  appendParams <- newParamTable(unique(bindedDF$field)[1], "pro", paramFiltDF)
+  print(p1)
+  
+  cat(vtab[1], "\n")
+  cat(vtab[2], "\n")
+  cat(appendParams, "\n")
+  
+  
+}
+
+
+# for( i in unique(df$dateCode)){
+#   cat("\\pagebreak")
+# 
+#   paramFiltDF <- filtDF %>% 
+#     dplyr::filter(., dateCode == i)
+#   paramFiltDF$time <- paramFiltDF$DateTime
+#   paramFiltDF$model_year <- substr(paramFiltDF$serialnumber, 10, 10)
+#   paramFiltDF$model <- paramFiltDF$serialnumber %>% substr(., 4, 7)
+#   paramFiltDF$machine_name <- paramFiltDF$Source
+#   
+#   
+#   p1 <- ggplot(paramFiltDF, aes(x = epoc, y = pro, colour = Source)) +
+#     geom_smooth( method = "loess", method.args = list(degree = 2), size = 1.75, se = FALSE, span = 0.33) +
+#     coord_cartesian(ylim=c(0, 100) + c(0,1)) +
+#     timeTheme() +
+#     labs(x = "Time", y = "Grain Productivity, t/h")
+#   
+# 
+#   
+#   pandoc.header(paste("Grain Productivity", i, sep = " "), level=2)
+#   
+#   vtab <- get_versatility_tbl(unique(bindedDF$field)[1], "pro", paramFiltDF)
+#   
+#   print(p1)
+# 
+#   
+#   cat(vtab[1], "\n")
+#   cat(vtab[2], "\n")
+#   cat(vtab[3], "\n")
+#   
+#   
+# }
+
+
+# for( i in unique(df$dateCode)){
+#   cat("\\pagebreak")
+#   
+#   VersDF <- df %>% 
+#     dplyr::filter(., dateCode == i)
+#   VersDF$time <- VersDF$DateTime
+#   VersDF$model_year <- substr(VersDF$serialnumber, 10, 10)
+#   VersDF$model <- VersDF$serialnumber %>% substr(., 4, 7)
+#   VersDF$machine_name <- VersDF$Source
+#   
+#     paramFiltDF <- filtDF %>% 
+#     dplyr::filter(., dateCode == i)
+#   paramFiltDF$time <- paramFiltDF$DateTime
+#   paramFiltDF$model_year <- substr(paramFiltDF$serialnumber, 10, 10)
+#   paramFiltDF$model <- paramFiltDF$serialnumber %>% substr(., 4, 7)
+#   paramFiltDF$machine_name <- paramFiltDF$Source
+#   
+#   p1 <- ggplot(VersDF, aes(x = DateTime, y = gpscore, colour = Source)) +
+#     geom_smooth( method = "loess", method.args = list(degree = 2), size = 1.75, se = FALSE, span = 0.33) +
+#     coord_cartesian(ylim=c(0, 100) + c(0,1)) +
+#     timeTheme() +
+#     labs(x = "Time", y = "Grain Productivity Score")
+#   pandoc.header(paste("Grain Productivity Score", i, sep = " "), level=2)
+#   vtab <- get_versatility_tbl(unique(bindedDF$field)[1], "gpscore", VersDF, paramFiltDF)
+#   
+#   print(p1)
+#   
+#   cat(vtab[1], "\n")
+#   cat(vtab[2], "\n")
+#   cat(vtab[3], "\n")
+#   
+#   
+# }
+```
+
+
+

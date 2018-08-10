@@ -1,0 +1,118 @@
+---
+title: "Untitled"
+author: "William Wang"
+date: "June 7, 2018"
+output: html_document
+params:
+  tiffDir: "//iso19prod/IntelligentCombine/Predictive_Maps/2017_Maps/R2_Lead_Farms/Borchert/From_Vista/02May18_YIELD_delivery_UPDATED" 
+  pptOutputdir: '~/GitHub/automatePPTX'
+  complementDir: '~/GitHub/automatePPTX/images'
+  slideImg: '~/GitHub/automatePPTX/slideImages'
+  
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(comment=NA, echo=FALSE, warning=FALSE, message=FALSE)
+library(officer)
+library(rvg)
+library(magrittr)
+library(rgdal)
+library(raster)
+library(rasterVis)
+library(ggplot2)
+library(colorRamps)
+library(colorspace)
+library(tools)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+```
+
+```{r}
+# Get Slide Images and df for table
+source("automateVistaScripts.R")
+```
+
+
+```{r}
+# Convert the .TIFF files into Plots
+setwd(params$tiffDir)
+
+fileList <- list.files(pattern = "*.TIF")
+# fileList # visual check
+plotList <- list()
+for(i in seq_along(fileList)) {
+  field <- raster(fileList[i])
+  field[field <= 0] <- NA
+  field <- trim(field)
+  meanVal <- round(cellStats(field, "mean"), 1)
+  medVal  <- round(median(field, na.rm = TRUE), 1)
+  minY <- quantile(field, probs = c(0.025), type = 7, names = FALSE)
+  maxY <- quantile(field, probs = c(0.975), type = 7, names = FALSE)
+  field[field < minY] <- minY
+  field[field > maxY] <- maxY
+  
+  plot <- gplot(field) +
+    geom_tile(aes(fill = value), na.rm = TRUE) +
+    scale_fill_gradientn(colours = rev(terrain_hcl(length(unique(na.omit(values(field)))))), na.value="transparent" ) +
+    coord_equal() +
+    ggtitle(paste(fileList[1], "Mean = ", meanVal, "Median = ", medVal)) +
+    theme(axis.ticks = element_blank(),
+          axis.text  = element_blank(),
+          axis.title = element_blank(),
+          legend.title = element_blank(),
+          plot.title = element_text(family = "ArialMT", hjust = 0, size = 9.5),
+          panel.grid.major = element_blank(), 
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank()
+    ) 
+  
+  plotList[[i]] <- plot 
+}
+# for(i in seq_along(plotList)){
+#   print(plotList[[i]])
+# }
+```
+
+
+
+```{r}
+setwd(params$complementDir)
+fileName <- file_path_sans_ext(fileList)
+svgPPT <- read_pptx()
+for(i in seq_along(plotList)){
+  pngImage <- substr(fileName[i], 1, unlist(gregexpr(pattern = "YIELD", fileName[i], fixed = TRUE)) + 4)
+  
+  svgPPT <- svgPPT %>%
+    add_slide(layout = "Blank", master = "Office Theme")
+  
+  setwd(params$complementDir)
+  svgPPT <- svgPPT %>%
+    ph_with_img_at(src = paste(pngImage,".png", sep = ""), left = 0, top = 2, width = 5, height = 5)
+  svgPPT<- svgPPT %>%
+    ph_with_gg_at(value = plotList[[i]], left = 5, top = 2, width = 5, height = 5)
+  
+  setwd(params$slideImg)
+  svgPPT <- svgPPT %>%
+    add_slide(layout = "Title and Content", master = "Office Theme")
+  svgPPT <- svgPPT %>%
+    ph_with_img_at(src = paste(fileName[i], ".png", sep = ""), left = 0, top = 0, height = 7.5, width = 10)
+}
+
+t <- tableGrob(tableFormat)
+t <- grid.arrange(t)
+
+
+ggsave(plot = t, file = "table.png", width = 11, height = 8.5, units = "in" )
+
+
+svgPPT <- svgPPT %>%
+  add_slide(layout = "Blank", master = "Office Theme")
+
+svgPPT <- svgPPT %>% 
+  ph_with_img_at( src = "table.png", left = 0, top = 0, height = 7.5, width = 10)
+```
+
+
+```{r}
+print(svgPPT, target = "svgTest.pptx")
+```

@@ -1,0 +1,8 @@
+
+*.pdf
+
+*.pptx
+*.html
+*.png
+*.Rhtml
+ReportGenerating/devTest/Shiny/.Rhistory

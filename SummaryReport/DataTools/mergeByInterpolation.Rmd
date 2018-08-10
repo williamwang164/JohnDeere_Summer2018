@@ -1,0 +1,414 @@
+---
+title: "Merge HA data in AWS with Simulation ToolChain Results in MATLAB file"
+author: "Robert A. Stevens"
+date: "`r Sys.Date()`"
+output: html_document
+params:
+  path1: "//iso19prod/IntelligentCombine/HA/ISE/reports/data/results/Kuhburg/"
+  fn1: "020-1_KUHBURG_WW-1Z0S685AAFM094704-HA.csv"
+  path2: "//iso19prod/IntelligentCombine/HA/ISE/reports/data/results/Kuhburg/020-1_KUHBURG_WW-1Z0S685AAFM094704/"
+  fn2: "020-1_KUHBURG_WW-1Z0S685AAFM094704_EPC_EP90_min.csv"
+  path3: "//iso19prod/IntelligentCombine/HA/ISE/reports/data/"
+  fn3: "sfcVarMapping.csv"
+  output: "~/GitHub/SimToolChain/Merge/Kuhburg/"
+  zoom: 16
+  tz: "Europe/Berlin"
+  gd: 7
+---
+
+Comparing `r params$fn1` and `r params$fn2`
+
+```{r, echo=FALSE, messages=FALSE, warning=FALSE}
+knitr::opts_chunk$set(comment=NA, echo=FALSE, warning=FALSE, message=FALSE)
+
+library(tidyverse)
+#library(mgcv)
+#library(R.matlab)
+library(ggplot2)
+library(ggmap)      # Used for Google Earth style plots
+library(colorRamps) # for matlab.like(...)
+library(Imap)       # for 'gdist'
+library(akima)
+library(fields)
+#library(interp)
+```
+
+## HA data in AWS
+
+```{r}
+# setwd(params$path1)
+# fileX <- params$fn1
+# dataX <- read.csv(fileX, header = TRUE, as.is = TRUE)
+pathX <- params$path1
+fileX <- params$fn1
+#dataX <- read.csv(fileX, header = TRUE, as.is = TRUE)
+dataX <- read.csv(paste0(pathX, fileX), header = TRUE, as.is = TRUE)
+
+
+# Make sure in data is sorted
+dataX <- dataX %>% arrange(., Index)
+
+cat("File", fileX, "has", dim(dataX)[2], "variables and", dim(dataX)[1], "values.\n")
+# Need to remove last 2 variables (time and Index) before saving in CSV file for the HA Level 1-2-3 code to work
+# It expects 141 variables, not 143
+
+mfLim <- 150/3.6 # Mass Flow Limit ~ 42
+
+dataX  <- dataX %>%
+  dplyr::mutate(.,
+    as = ifelse(as == 3, 0, as), # fix "unknown" values (3) before downsampling and calculating machine state (ms)
+    se = ifelse(se == 3, 1, se), # fix "unknown" values (3) before downsampling and calculating machine state (ms)
+    mf = ifelse(mf > mfLim, NA, mf) # eliminate values > mfLim - 'error' codes:  ~325, ~665, ~66535
+  )
+
+# ggplot(data = dataX, aes(x = lon, y = lat, color = as.factor(fss))) +
+#   geom_point() +
+#   coord_map() 
+```
+
+## Simulation ToolChain data in MATLAB file
+
+```{r}
+setwd(params$path2)
+fileY <- params$fn2
+dataY <- read.csv(fileY, header = FALSE, as.is = TRUE)
+
+names(dataY) <- c(
+  "Time", 
+  "biomassAtVehiclePosition", 
+  "enginePower" , 
+  "groundSpeed", 
+  "latitudeVectorDegreesSimulationTimeBased",
+  "longitudeVectorDegreesSimulationTimeBased", 
+  "predictedBiomass", 
+  "rotorPressure", 
+  "targetEnginePower",
+  "targetRotorPressure", 
+  "traveledDistance", 
+  "propulsionPower", 
+  "fuelRate_LiterPerHour"
+)
+
+dataY <- dataY %>% arrange(., Time)
+
+cat("File", fileY, "has", dim(dataY)[2], "variables and", dim(dataY)[1], "values.\n")
+
+dataY2 <- dataY %>% 
+  dplyr::filter(., Time - floor(Time) == 0) %>%
+  dplyr::rename(.,
+    lon = longitudeVectorDegreesSimulationTimeBased,
+    lat = latitudeVectorDegreesSimulationTimeBased
+  )
+
+rm(dataY)
+#gc()
+
+cat("Down-sampled has", dim(dataY2)[2], "variables and", dim(dataY2)[1], "values.\n")
+```
+
+```{r}
+setwd(params$path3)
+fileZ <- params$fn3
+dataZ <- read.csv(fileZ, header = TRUE, as.is = TRUE)
+#cat("File", fileZ, "has", dim(dataZ)[2], "variables and", dim(dataZ)[1], "values.\n")
+```
+
+```{r, fig.width=10}
+gridSize <- 10
+minX <- with(dataX, min(lon, na.rm = TRUE))
+maxX <- with(dataX, max(lon, na.rm = TRUE))
+minY <- with(dataX, min(lat, na.rm = TRUE))
+maxY <- with(dataX, max(lat, na.rm = TRUE))
+
+xdist1 <- gdist(minX, minY, maxX, minY, units = "m") 
+xdist2 <- gdist(minX, maxY, maxX, maxY, units = "m") 
+xdist  <- max(xdist1, xdist2)
+xinc   <- round(xdist/gridSize, -1) # number of X-axis increments for grid
+
+ydist1 <- gdist(minX, minY, minX, maxY, units = "m") 
+ydist2 <- gdist(maxX, minY, maxX, maxY, units = "m") 
+ydist  <- max(ydist1, ydist2)
+yinc   <- round(ydist/gridSize, -1) # number of Y-axis increments for grid
+
+geo_interp <- function(dfX, dfY, var, decimals) {
+  # geospatial interpolation
+  # assumes there are no missing values for dfX lon and lat (remove from data frame prior to use)
+  
+  # check for all missing values for 'var'
+  geoDecimals <- params$gd
+  
+  if(all(is.na(dfX[ , var]))) {
+    fit <- rep(NA, length(dfY[ , "lon"]))
+  } else {
+    # if any missing values, need to remove them
+    dfX2 <- dfX[!is.na(dfX[ , var]), ]
+    # check if only 1 value
+    if(length(unique(dfX2[ , var])) == 1) {
+      fit <- rep(dfX2[1, var], length(dfY[ , "lon"])) # use 1st value
+    } else {
+      
+      gmodel <- interp(
+        dfX2[ , "lon"], 
+        dfX2[ , "lat"], 
+        as.numeric(dfX2[ , var]), 
+        linear = TRUE,  
+        extrap = FALSE, 
+        nx = as.integer(xinc), 
+        ny = as.integer(yinc), 
+        duplicate = "mean"
+      )
+      look <- cbind(round(dfY[ , "lon"], geoDecimals), round(dfY[ , "lat"], geoDecimals))
+      look <- as.matrix(look, ncol = 2)
+      fit <- round(interp.surface(gmodel, look), decimals)
+    
+      minX <- min(dfX2[ , var])
+      maxX <- max(dfX2[ , var])
+      fit <- ifelse(fit < minX, minX, fit)
+      fit <- ifelse(fit > maxX, maxX, fit)
+    }
+  }
+  fit
+}
+
+# identify row number:  rowID
+dataX$rowID <- row.names(dataX)
+
+# round lon/lat to specificed decimals
+dataX2 <- dataX %>%
+  mutate(.,
+    lon = round(lon, params$gd),
+    lat = round(lat, params$gd)
+  )
+
+# identify row at first occurrance of lon/lat pair
+rowID <- dataX2 %>%
+  group_by(., lon, lat) %>%
+  summarize(., min = min(rowID))
+
+dataX2 <- dataX2[dataX2$rowID %in% rowID$min, ] # 'dedup' after rounding lon/lat
+
+```
+
+```{r}
+model <- dataX$serialnumber %>% unique(.) %>% substr(., 4, 7)
+
+# for power utilization = ep/ratedpower, need mapping of model to ratedpower
+
+ratedPower <- case_when(
+  model == "S660" ~ 249,
+  model == "S670" ~ 292,
+  model == "S680" ~ 353,
+  model == "S685" ~ 373,
+  model == "S690" ~ 405,
+  TRUE ~ as.numeric(NA)
+)
+
+# Calculate Date + Time for dataX
+dataX$dateTime <- with(dataX,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = "UTC")
+)
+
+dataX$localtime <- with(dataX,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = params$tz)
+)
+
+# Calculate Date + Time for dataY2
+dataY2$dateTime <- as.character(dataY2$Time + dataX$dateTime[1])
+# "2016-09-03 20:03:39"
+#  1234567890123456789
+
+dataY2$localtime <- as.character(dataY2$Time + dataX$localtime[1])
+
+# HA variables and AWS variable names
+dataY2$sessionid          <- dataX$sessionid[1] # pick 1st alphanumeric value
+dataY2$mjdoperator        <- dataX$mjdoperator[1] # should only have 1 value
+dataY2$mjdorgname         <- dataX$mjdorgname[1] # always missing (?)
+dataY2$mjdorg             <- dataX$mjdorg[1] # always zero (?)
+dataY2$myjduserid         <- dataX$myjduserid[1] # always missing (?)
+dataY2$sourceserialnumber <- dataX$sourceserialnumber[1] # should only have 1 value
+dataY2$serialnumber       <- dataX$serialnumber[1] # should only have 1 value
+dataY2$client             <- dataX$client[1] # should only have 1 value
+dataY2$farm               <- dataX$farm[1] # should only have 1 value
+dataY2$field              <- dataX$field[1] # should only have 1 value
+dataY2$eiccropid          <- dataX$eiccropid[1] # should only have 1 value
+dataY2$cropyear           <- dataX$cropyear[1] # should only have 1 value
+dataY2$datasource         <- dataX$datasource[1] # always missing (?)
+# dataY2$sttime             <- geo_interp(dataX222, dataY2, "sttime", -2)
+dataY2$sttime             <- dataX$sttime[1]
+dataY2$deltatime          <- geo_interp(dataX2, dataY2, "deltatime", 0)
+# dataY2$endtime            <- geo_interp(dataX2, dataY2, "endtime", 0)
+dataY2$endtime            <- dataX$endtime[1]
+dataY2$mtime              <- geo_interp(dataX2, dataY2, "mtime", -3)
+dataY2$a                  <- geo_interp(dataX2, dataY2, "a", 2)
+dataY2$as                 <- geo_interp(dataX2, dataY2, "as", 0)
+dataY2$aslh               <- geo_interp(dataX2, dataY2, "aslh", 0)
+dataY2$asllh              <- geo_interp(dataX2, dataY2, "asllh", 0)
+dataY2$aslrh              <- geo_interp(dataX2, dataY2, "aslrh", 0)
+dataY2$cb                 <- geo_interp(dataX2, dataY2, "cb", 10)
+dataY2$cds                <- geo_interp(dataX2, dataY2, "cds", 0)
+dataY2$cfs                <- geo_interp(dataX2, dataY2, "cfs", 0)
+dataY2$chs                <- geo_interp(dataX2, dataY2, "chs", 0)
+dataY2$cm                 <- geo_interp(dataX2, dataY2, "cm", 2)
+dataY2$co2                <- geo_interp(dataX2, dataY2, "co2", 3)
+dataY2$cs                 <- geo_interp(dataX2, dataY2, "cs", 0)
+dataY2$csl                <- geo_interp(dataX2, dataY2, "csl", 0)
+dataY2$csp                <- geo_interp(dataX2, dataY2, "csp", 0)
+dataY2$eh                 <- geo_interp(dataX2, dataY2, "eh", 2)
+dataY2$ep                 <- (dataY2$enginePower/100)*ratedPower
+dataY2$epe                <- geo_interp(dataX2, dataY2, "epe", 15)
+dataY2$es                 <- geo_interp(dataX2, dataY2, "es", 2)
+dataY2$fc                 <- dataY2$fuelRate_LiterPerHour
+#dataY2$fcih
+dataY2$fescore            <- geo_interp(dataX2, dataY2, "fescore", 13)
+dataY2$fhr                <- geo_interp(dataX2, dataY2, "fhr", 0)
+dataY2$flc                <- geo_interp(dataX2, dataY2, "flc", 2)
+dataY2$fss                <- geo_interp(dataX2, dataY2, "fss", 0)
+dataY2$ft                 <- geo_interp(dataX2, dataY2, "ft", 2)
+dataY2$fte                <- geo_interp(dataX2, dataY2, "fte", 2)
+dataY2$glscore            <- geo_interp(dataX2, dataY2, "glscore", 13)
+dataY2$gpscore            <- geo_interp(dataX2, dataY2, "gpscore", 13)
+dataY2$gpsd               <- as.numeric(substr(dataY2$dateTime,  9, 10))
+dataY2$gpsh               <- as.numeric(substr(dataY2$dateTime, 12, 13))
+dataY2$gpsm               <- as.numeric(substr(dataY2$dateTime,  6,  7))
+dataY2$gpsmi              <- as.numeric(substr(dataY2$dateTime, 15, 16))
+dataY2$gpss               <- as.numeric(substr(dataY2$dateTime, 18, 19))
+dataY2$gpssp              <- dataY2$groundSpeed
+dataY2$gpsy               <- as.numeric(substr(dataY2$dateTime,  1,  4))
+dataY2$gtfl               <- geo_interp(dataX2, dataY2, "gtfl", 1)
+dataY2$hfe                <- geo_interp(dataX2, dataY2, "hfe", 14)
+dataY2$hhp                <- geo_interp(dataX2, dataY2, "hhp", 1)
+dataY2$hhtr               <- geo_interp(dataX2, dataY2, "hhtr", 2)
+dataY2$hs                 <- geo_interp(dataX2, dataY2, "hs", 0)
+dataY2$hwi                <- geo_interp(dataX2, dataY2, "hwi", 3)
+dataY2$hwu                <- geo_interp(dataX2, dataY2, "hwu", 2)
+dataY2$it                 <- geo_interp(dataX2, dataY2, "it", 2)
+dataY2$iwtu               <- geo_interp(dataX2, dataY2, "iwtu", 2)
+#dataY2$lat                <- dataY2$latitudeVectorDegreesSimulationTimeBased
+#dataY2$lon                <- dataY2$longitudeVectorDegreesSimulationTimeBased
+#dataY2$mf
+dataY2$mfu                <- geo_interp(dataX2, dataY2, "mfu", 0)
+#dataY2$ms                 
+dataY2$msc                <- geo_interp(dataX2, dataY2, "msc", 0)
+dataY2$opscore            <- geo_interp(dataX2, dataY2, "opscore", 13)
+dataY2$pe                 <- geo_interp(dataX2, dataY2, "pe", 3)
+dataY2$pfp                <- geo_interp(dataX2, dataY2, "pfp", 0)
+dataY2$pl0                <- geo_interp(dataX2, dataY2, "pl0", 2)
+dataY2$pl1                <- geo_interp(dataX2, dataY2, "pl1", 2)
+dataY2$plcs               <- geo_interp(dataX2, dataY2, "plcs", 0)
+dataY2$pp                 <- dataY2$propulsionPower
+dataY2$ppd                <- geo_interp(dataX2, dataY2, "ppd", 0)
+#dataY2$pro
+dataY2$prp                <- geo_interp(dataX2, dataY2, "prp", 0)
+dataY2$ptr                <- geo_interp(dataX2, dataY2, "ptr", 2)
+dataY2$puscore            <- geo_interp(dataX2, dataY2, "puscore", 13)
+dataY2$pye                <- geo_interp(dataX2, dataY2, "pye", 15)
+dataY2$rdp                <- dataY2$rotorPressure
+dataY2$re                 <- geo_interp(dataX2, dataY2, "re", 0)
+dataY2$rl0                <- geo_interp(dataX2, dataY2, "rl0", 2)
+dataY2$rl1                <- geo_interp(dataX2, dataY2, "rl1", 15)
+dataY2$rs                 <- geo_interp(dataX2, dataY2, "rs", 0)
+dataY2$rsel               <- geo_interp(dataX2, dataY2, "rsel", 0)
+dataY2$rsl                <- geo_interp(dataX2, dataY2, "rsl", 15)
+dataY2$rte                <- geo_interp(dataX2, dataY2, "rte", 0)
+dataY2$rtka               <- geo_interp(dataX2, dataY2, "rtka", 0)
+dataY2$se                 <- geo_interp(dataX2, dataY2, "se", 0)
+dataY2$sellsc             <- geo_interp(dataX2, dataY2, "sellsc", 0)
+dataY2$sf1a               <- geo_interp(dataX2, dataY2, "sf1a", 0)
+dataY2$sf2a               <- geo_interp(dataX2, dataY2, "sf2a", 0)
+dataY2$she                <- geo_interp(dataX2, dataY2, "she", 2)
+dataY2$sld                <- geo_interp(dataX2, dataY2, "sld", 15)
+dataY2$sllsc              <- geo_interp(dataX2, dataY2, "sllsc", 0)
+dataY2$slrsc              <- geo_interp(dataX2, dataY2, "slrsc", 0)
+dataY2$ss                 <- geo_interp(dataX2, dataY2, "ss", 0)
+dataY2$tal                <- geo_interp(dataX2, dataY2, "tal", 14)
+dataY2$tlt                <- geo_interp(dataX2, dataY2, "tlt", 4)
+dataY2$ts                 <- geo_interp(dataX2, dataY2, "ts", 0)
+dataY2$tsel               <- geo_interp(dataX2, dataY2, "tsel", 14)
+dataY2$tshl               <- geo_interp(dataX2, dataY2, "tshl", 14)
+dataY2$tst                <- geo_interp(dataX2, dataY2, "tst", 3)
+dataY2$tv                 <- geo_interp(dataX2, dataY2, "tv", 1)
+dataY2$upd                <- geo_interp(dataX2, dataY2, "upd", 15)
+dataY2$ur                 <- geo_interp(dataX2, dataY2, "ur", 2)
+dataY2$vs                 <- geo_interp(dataX2, dataY2, "vs", 0)
+dataY2$ws                 <- geo_interp(dataX2, dataY2, "ws", 1)
+dataY2$ycf                <- geo_interp(dataX2, dataY2, "ycf", 0)
+dataY2$yield              <- geo_interp(dataX2, dataY2, "yield", 14)
+dataY2$hmcid              <- geo_interp(dataX2, dataY2, "hmcid", 0)
+dataY2$dtc                <- geo_interp(dataX2, dataY2, "dtc", 0)
+dataY2$gtf                <- geo_interp(dataX2, dataY2, "gtf", 0)
+dataY2$loscore            <- geo_interp(dataX2, dataY2, "loscore", 13)
+dataY2$a1f                <- geo_interp(dataX2, dataY2, "a1f", 0)
+dataY2$a1ff               <- geo_interp(dataX2, dataY2, "a1ff", 15)
+dataY2$a2f                <- geo_interp(dataX2, dataY2, "a2f", 0)
+dataY2$a2ff               <- geo_interp(dataX2, dataY2, "a2ff", 15)
+dataY2$a3f                <- geo_interp(dataX2, dataY2, "a3f", 0)
+dataY2$a3ff               <- geo_interp(dataX2, dataY2, "a3ff", 15)
+dataY2$a4f                <- geo_interp(dataX2, dataY2, "a4f", 0)
+dataY2$a4ff               <- geo_interp(dataX2, dataY2, "a4ff", 15)
+dataY2$a5f                <- geo_interp(dataX2, dataY2, "a5f", 0)
+dataY2$a5ff               <- geo_interp(dataX2, dataY2, "a5ff", 15)
+dataY2$a6f                <- geo_interp(dataX2, dataY2, "a6f", 0)
+dataY2$a6ff               <- geo_interp(dataX2, dataY2, "a6ff", 15)
+dataY2$ht                 <- geo_interp(dataX2, dataY2, "ht", 0)
+#dataY2$localtime
+dataY2$tridsa             <- geo_interp(dataX2, dataY2, "tridsa", 0)
+dataY2$dvidsa             <- geo_interp(dataX2, dataY2, "dvidsa", 0)
+dataY2$tridsr             <- geo_interp(dataX2, dataY2, "tridsr", 0)
+dataY2$dvidsr             <- geo_interp(dataX2, dataY2, "dvidsr", 0)
+dataY2$brchid             <- geo_interp(dataX2, dataY2, "brchid", 0)
+dataY2$asllhk             <- geo_interp(dataX2, dataY2, "asllhk", 0)
+dataY2$aslrhk             <- geo_interp(dataX2, dataY2, "aslrhk", 0)
+dataY2$cslk               <- geo_interp(dataX2, dataY2, "cslk", 0)
+dataY2$cspk               <- geo_interp(dataX2, dataY2, "cspk", 0)
+dataY2$aslhk              <- geo_interp(dataX2, dataY2, "aslhk", 0)
+
+dataY2$data_year          <- geo_interp(dataX2, dataY2, "data_year", 0)
+dataY2$region             <- dataX$region[1] # should only have 1 value
+
+mfucf <- 10  # mass_flow_unit_correction_factor (convert from kg/m^2 to t/ha)
+m2p   <- 3.6 # mass flow to productivity conversion factor
+ 
+dataY2 <- dataY2 %>% 
+  dplyr::mutate(.,
+    mf    = hwu*gpssp*yield/(mfucf*m2p),
+    pro   = m2p*mf,
+    fcih  = fc/pro
+  )
+
+mll <-  0.00 # Mass Flow lower limit (was 1.0 - tune later with Data Mining?)
+sll <-  0.05 # Speed lower limit (tune later with Data Mining?)
+
+dataY2 <- dataY2 %>% 
+  dplyr::mutate(.,
+    ms = case_when(
+      fss == 1 ~  8,
+      as == 1 & hs == 0 ~  3,
+      as == 1 & hs == 1 & mf > mll ~ 4,
+      as == 0 & hs == 1 & mf > mll ~ 5,
+      gpssp <= sll & gtf == 0 ~ 1,
+      gpssp <= sll & gtf == 1 ~ 2,
+      gpssp > sll & se == 1 ~ 6,
+      gpssp > sll & se == 0 ~ 7,
+      TRUE ~ 0
+    )
+  )
+
+dataY2 <- dataY2[ , dataZ$AWS]
+```
+
+```{r}
+setwd(params$output) # use same location as input file
+
+# fn <- gsub(".csv", "", params$fn1)
+# fn <- paste0(fn, "-original.csv") 
+# write.table(dataX, file = fn, sep = ",", col.names = FALSE, row.names = FALSE, na = "")
+
+fn <- gsub(".csv", "", params$fn2)
+fn <- paste0(fn, "-sim.csv") 
+write.table(dataY2, file = fn, sep = ",", col.names = FALSE, row.names = FALSE, na = "")
+getwd() # print location of file
+```
+
+```{r}
+# Run everything
+```

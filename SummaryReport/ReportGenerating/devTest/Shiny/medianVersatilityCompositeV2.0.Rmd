@@ -1,0 +1,739 @@
+---
+output:
+  pdf_document:
+    includes:
+      in_header: header.tex
+    fig_width: 25
+    fig_height: 25
+classoption: landscape
+geometry: margin=2cm
+params:
+  pc: 0.8
+  dpc: 0.98
+  hFiles: NA
+  sFiles: NA
+  hNames: //iso19prod/IntelligentCombine/HA/ISE/reports/data/sfcVarMapping.csv
+  file1: //iso19prod/IntelligentCombine/HA/ISE/reports/data/results/Kuhburg/020-1_KUHBURG_WW-1Z0S685AKFM094700-HA.csv
+  file2: //iso19prod/IntelligentCombine/HA/ISE/reports/data/results/Kuhburg/020-1_KUHBURG_WW-1Z0S685AAFM094704-HA.csv
+  file3: //iso19prod/IntelligentCombine/HA/ISE/reports/data/results/Kuhburg/020-1_KUHBURG_WW-1Z0S685AVFM094684-HA.csv
+  path: '~/GitHub/SimToolChain/Merge/Kuhburg/WholeField/'
+  file4: 020-1_KUHBURG_WW-1Z0S685AKFM094700_MPC_EP90_PerfectPredictions_min-sim_processed.csv
+  file5: 020-1_KUHBURG_WW-1Z0S685AAFM094704_MPC_EP90_PerfectPredictions_min-sim_processed.csv
+  file6: 020-1_KUHBURG_WW-1Z0S685AVFM094684_MPC_EP90_PerfectPredictions_min-sim_processed.csv
+  file7: //iso19prod/IntelligentCombine/HA/ISE/reports/data/sfcVarMapping.csv
+  tz: "Canada/Central"
+---
+
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(comment=NA, echo=FALSE, warning=FALSE, message=FALSE)
+library(tidyverse)
+library(dbplyr)
+library(tinytex)
+library(colorRamps)
+library(knitr)
+library(kableExtra)
+library(gridExtra)
+library(grid)
+library(ggplot2)
+library(ggmap)
+library(ggpubr)
+library(scales)
+library(data.table)
+library(pander)
+source("src/compositeVersatility.R")
+source("src/plotUtil.R")
+source("src/tableUtil.R")
+
+```
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE, }
+# # Read in Files
+# 
+# harvFiles <- params$hFiles
+# i <- 1
+# asHarvest <- read.csv(paste(harvFiles$path[i]), header = TRUE, as.is = TRUE)
+# i <- i+1
+# while(i <= length(harvFiles$path)){
+#   asHarvest <- rbind(asHarvest, read.csv(paste(harvFiles$path[i]), header = TRUE, as.is = TRUE))
+#   i <- i+1
+# }
+# 
+# simFiles <- params$sFiles
+# i <- 1
+# simulatedHarvest <- read.csv(paste(simFiles$path[i]), header = FALSE, as.is = TRUE)
+# i <- i+1
+# while(i <= length(simFiles$path)){
+#   simulatedHarvest <- rbind(simulatedHarvest, read.csv(paste(simFiles$path[i]), header = FALSE, as.is = TRUE))
+#   i <- i+1
+# }
+# remove(i)
+# 
+# headerNames      <- read.csv(params$hNames, header = TRUE)
+# names(simulatedHarvest) <- headerNames$AWS
+# 
+# asHarvest        <- mutate(asHarvest, Source = "As Harvested")
+# simulatedHarvest <- mutate(simulatedHarvest, Source = "Simulated")
+# 
+# asHarvest$hwu <- with(asHarvest, ifelse(is.na(hwu), hwi, hwu))
+# asHarvest[["time"]] <- NULL
+# asHarvest[["Index"]] <- NULL
+# bindedDF  <- rbind(asHarvest, simulatedHarvest)
+```
+
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE, }
+# Read in files
+setwd(params$path)
+headerNames      <- read.csv(params$file7, header = TRUE)
+
+
+
+tempAsHarvest        <- read.csv(params$file1, header = TRUE, as.is = TRUE)
+
+model <- tempAsHarvest$serialnumber %>% unique(.) %>% substr(., 4, 7) %>% unique(.)
+maxPower <- case_when(
+  model == "S660" ~ 249,
+  model == "S670" ~ 292,
+  model == "S680" ~ 353,
+  model == "S685" ~ 373,
+  model == "S690" ~ 405,
+  TRUE ~ as.numeric(NA)
+)
+tempAsHarvest <- tempAsHarvest %>%
+  mutate(., pu = ep/maxPower * 100)
+
+asHarvest <- tempAsHarvest
+
+
+
+tempAsHarvest        <- read.csv(params$file2, header = TRUE, as.is = TRUE)
+
+model <- tempAsHarvest$serialnumber %>% unique(.) %>% substr(., 4, 7) %>% unique(.)
+maxPower <- case_when(
+  model == "S660" ~ 249,
+  model == "S670" ~ 292,
+  model == "S680" ~ 353,
+  model == "S685" ~ 373,
+  model == "S690" ~ 405,
+  TRUE ~ as.numeric(NA)
+)
+tempAsHarvest <- tempAsHarvest %>%
+  mutate(., pu = ep/maxPower * 100)
+
+asHarvest <- rbind(asHarvest, tempAsHarvest)
+
+tempAsHarvest        <-  read.csv(params$file3, header = TRUE, as.is = TRUE)
+
+model <- tempAsHarvest$serialnumber %>% unique(.) %>% substr(., 4, 7) %>% unique(.)
+maxPower <- case_when(
+  model == "S660" ~ 249,
+  model == "S670" ~ 292,
+  model == "S680" ~ 353,
+  model == "S685" ~ 373,
+  model == "S690" ~ 405,
+  TRUE ~ as.numeric(NA)
+)
+tempAsHarvest <- tempAsHarvest %>%
+  mutate(., pu = ep/maxPower * 100)
+
+asHarvest <- rbind(asHarvest, tempAsHarvest)
+
+
+
+
+tempSimHarvest <- read.csv(params$file4, header = FALSE, as.is = TRUE)
+names(tempSimHarvest) <- headerNames$AWS
+model <- tempSimHarvest$serialnumber %>% unique(.) %>% substr(., 4, 7) %>% unique(.)
+maxPower <- case_when(
+  model == "S660" ~ 249,
+  model == "S670" ~ 292,
+  model == "S680" ~ 353,
+  model == "S685" ~ 373,
+  model == "S690" ~ 405,
+  TRUE ~ as.numeric(NA)
+)
+tempSimHarvest <- tempSimHarvest %>%
+  mutate(., pu = ep/maxPower * 100)
+
+simulatedHarvest <- tempSimHarvest
+  
+tempSimHarvest <- read.csv(params$file5, header = FALSE, as.is = TRUE)
+names(tempSimHarvest) <- headerNames$AWS
+model <- tempSimHarvest$serialnumber %>% unique(.) %>% substr(., 4, 7) %>% unique(.)
+maxPower <- case_when(
+  model == "S660" ~ 249,
+  model == "S670" ~ 292,
+  model == "S680" ~ 353,
+  model == "S685" ~ 373,
+  model == "S690" ~ 405,
+  TRUE ~ as.numeric(NA)
+)
+tempSimHarvest <- tempSimHarvest %>%
+  mutate(., pu = ep/maxPower * 100)
+
+simulatedHarvest <- rbind(simulatedHarvest, tempSimHarvest)
+
+tempSimHarvest <-  read.csv(params$file6, header = FALSE, as.is = TRUE)
+names(tempSimHarvest) <- headerNames$AWS
+model <- tempSimHarvest$serialnumber %>% unique(.) %>% substr(., 4, 7) %>% unique(.)
+maxPower <- case_when(
+  model == "S660" ~ 249,
+  model == "S670" ~ 292,
+  model == "S680" ~ 353,
+  model == "S685" ~ 373,
+  model == "S690" ~ 405,
+  TRUE ~ as.numeric(NA)
+)
+tempSimHarvest <- tempSimHarvest %>%
+  mutate(., pu = ep/maxPower * 100)
+
+simulatedHarvest <- rbind(simulatedHarvest, tempSimHarvest)
+
+headerNames      <- read.csv(params$file7, header = TRUE)
+
+
+
+asHarvest        <- mutate(asHarvest, Source = "As Harvested")
+simulatedHarvest <- mutate(simulatedHarvest, Source = "Simulated")
+asHarvest[["time"]] <- NULL
+asHarvest[["Index"]] <- NULL
+
+asHarvest$hwu <- with(asHarvest, ifelse(is.na(hwu), hwi, hwu))
+
+
+bindedDF  <- rbind(asHarvest, simulatedHarvest)
+
+tempSimHarvest <- NULL
+tempAsHarvest <- NULL
+```
+
+# Case Report for machine `r unique(bindedDF$serialnumber)`
+
+```{r}
+
+# model <- bindedDF$serialnumber %>% unique(.) %>% substr(., 4, 7) %>% unique(.)
+# 
+# maxPower <- case_when(
+#   model == "S660" ~ 249,
+#   model == "S670" ~ 292,
+#   model == "S680" ~ 353,
+#   model == "S685" ~ 373,
+#   model == "S690" ~ 405,
+#   TRUE ~ as.numeric(NA)
+# )
+# 
+# bindedDF <- bindedDF %>%
+#   mutate(., pu = ep/maxPower * 100)
+```
+
+```{r}
+bindedDF <- bindedDF %>% dplyr::filter(., ms == 4 | ms == 5)
+```
+
+```{r}
+# Prepare separate dfs for plots
+simDF <- bindedDF %>% dplyr::filter(Source == "Simulated")
+harvDF <- bindedDF %>% dplyr::filter(Source == "As Harvested")
+```
+
+
+
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE}
+#Harvest Performance Scores (AKA HPS)
+#  overall performance, grain productivity, power utalization, fuel Economy, grain
+#  saving
+
+hpsTable <-
+  bindedDF %>% dplyr::filter(ms == 4 | ms == 5) %>% dplyr::group_by(Source) %>% dplyr::summarise(
+    Performance = mean(opscore, na.rm = TRUE),
+    Productivity = mean(gpscore, na.rm = TRUE),
+    Power = mean(puscore, na.rm = TRUE),
+    Fuel = mean(fescore, na.rm = TRUE),
+    Grain = mean(glscore, na.rm = TRUE)
+  )
+
+#Harvesting Performance - Engineering Units (AKA HPEU)
+# Grain Prod, Power Util, Fuel Econ, Total Loss
+
+hpeuTable <-
+  bindedDF %>%
+  dplyr::filter(ms == 4 | ms == 5) %>%
+  dplyr::group_by(Source) %>%
+  dplyr::summarise(
+    GrainProd = mean(pro, na.rm = TRUE),
+    PowerUtil = mean(pu, na.rm = TRUE),
+    FuelEcon = mean(fcih, na.rm = TRUE)
+  )
+
+#Power Summary (AKA PS)
+# Engine Harv, Eng Harv and UL, Avg Harv Specific Pwr, Propulsion Power
+psTable <-
+  bindedDF %>%
+  dplyr::filter(ms == 4 | ms == 5 ) %>%
+  dplyr::group_by(Source) %>%
+  dplyr::summarise(
+    EngineHarv = mean(ep, na.rm = TRUE),
+    EngineHarvUL = mean(ep, na.rm = TRUE),
+    AvgHarvSpecificPwr = mean(ifelse(pro == 0, NA, ep/pro), na.rm = TRUE),
+    PropulsionPower = mean(pp, na.rm = TRUE)
+  )
+
+engineHarvesting <- bindedDF %>%
+  dplyr::filter(ms == 5) %>%
+  dplyr::group_by(Source) %>%
+  dplyr::summarise(EngineHarv = mean(ep, na.rm = TRUE))
+
+psTable$EngineHarv <- engineHarvesting$EngineHarv
+
+# agronomic and output summary (AKA AOS)
+# Avg Harvest Speed, Harv Area, Avg Yield
+aosTable <-
+  bindedDF %>% 
+  dplyr::filter(ms == 4 | ms == 5) %>% 
+  dplyr::group_by(Source) %>% 
+  dplyr::summarize(
+    HarvestSpeed = mean(gpssp, na.rm = TRUE),
+    HarvestArea = sum(gpssp * pmin(hwu, hwi, na.rm = TRUE) / 36000, na.rm = TRUE),
+    AvgYield = mean(yield, na.rm = TRUE)
+  )
+
+row.names(hpsTable) <- hpsTable$Source
+hpsTable$Source <- NULL
+  names(hpsTable) <- c("Overall Performance", "Grain Productivity", "Power Utilization", "Fuel Economy", "Grain Saving")
+
+
+row.names(hpeuTable) <- hpeuTable$Source
+hpeuTable$Source <- NULL
+names(hpeuTable) <- c("Grain Prod (t/h)", "Power Utl (%)", "Fuel Econ (1/t)")
+
+
+row.names(psTable) <- psTable$Source
+psTable$Source <- NULL
+names(psTable) <- c("Engine Harv (kW)", "Eng Harv & Utl (kW)", "Avg Harv Specific Pwr (kW/t/h)", "Propulsion Power (kW)")
+
+
+row.names(aosTable) <- aosTable$Source
+aosTable$Source <- NULL
+names(aosTable) <- c("Avg Harvest Speed (km/h)", "Harv Area (ha)", "Avg Yield (t/ha)")
+
+```
+
+# Overall Performance Summary
+
+## Field Harvesting Performance Summary
+
+### Harvesting Performance Scores
+
+```{r, results = "asis"}
+kable(round(hpsTable, digits = 0), "latex", booktabs = TRUE)
+```
+
+### Harvesting Performance - Engineering Units
+
+```{r, results = "asis"}
+
+kable(round(hpeuTable, digits = 1),"latex", booktabs = TRUE)
+```
+
+### Power Summary
+
+```{r, results = "asis"}
+kable(round(psTable, digits = 0), "latex", booktabs = TRUE)
+```
+
+### Agronomic & Output Summary
+
+```{r, results = "asis"}
+kable(round(aosTable, digits = 1), "latex", booktabs = TRUE)
+```
+
+```{r}
+minX <- with(bindedDF, min(lon, na.rm = TRUE))
+maxX <- with(bindedDF, max(lon, na.rm = TRUE))
+minY <- with(bindedDF, min(lat, na.rm = TRUE))
+maxY <- with(bindedDF, max(lat, na.rm = TRUE))
+
+minX <- round(minX, 4) - 0.0001
+maxX <- round(maxX, 4) + 0.0001
+minY <- round(minY, 4) - 0.0001
+maxY <- round(maxY, 4) + 0.0001
+
+```
+
+```{r}
+# Calculate Zoom
+bindedDFZoom <- calc_zoom(lon, lat, bindedDF) - 1
+
+# Calculate Center of path
+bindedDFlon <- (max(bindedDF$lon) + min(bindedDF$lon))/2
+bindedDFlat <- (max(bindedDF$lat) + min(bindedDF$lat))/2
+
+# Get The Maps
+map <-
+  get_map(location = c(lon = bindedDFlon, lat = bindedDFlat),
+          zoom = bindedDFZoom, maptype = "satellite")
+
+bindedDFscale <-
+  data.frame(lat = c(min(bindedDF$lat), max(bindedDF$lat)),
+             lon = c(min(bindedDF$lon), max(bindedDF$lon)))
+
+
+```
+
+## Harvesting Ground Speed (GPSSP)
+
+```{r}
+
+plotAsHarvest <- plotMap(map, bindedDF, "gpssp", params$pc)
+
+plotDensity <- plotDens(
+  df = bindedDF, 
+  item = "gpssp", 
+  pc = params$dpc, 
+  label = "Ground Speed, kph")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(2,2,2,2,2,2),
+                                   c(2,2,2,2,2,2)))
+
+```
+
+## Grain Productivity (PRO)
+
+```{r}
+plotAsHarvest <- plotMap(map, bindedDF, "pro", params$pc)
+
+plotDensity <- plotDens(
+  df = bindedDF, 
+  item = "pro", 
+  pc = params$dpc, 
+  label = "Grain Productivity, t/h")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(2,2,2,2,2,2),
+                                   c(2,2,2,2,2,2)))
+
+```
+
+## Power Utilization (100 * EP/MaxPower)
+
+```{r}
+
+plotAsHarvest <- plotMap(map, bindedDF, "pu", params$pc)
+
+densLim <- densLimit(bindedDF, "pu", params$dpc)
+
+plotDensity <- plotDens(
+  df = bindedDF, 
+  item = "pu", 
+  pc = params$dpc, 
+  label = "Power Utilization, %")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(2,2,2,2,2,2),
+                                   c(2,2,2,2,2,2)))
+```
+
+## Fuel Consumption
+
+```{r}
+
+plotAsHarvest <- plotMap(map, bindedDF, "fcih", params$pc)
+
+plotDensity <- plotDens(
+  df = bindedDF, 
+  item = "fcih", 
+  pc = params$dpc, 
+  label = "Fuel Consumption, l/t")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(2,2,2,2,2,2),
+                                   c(2,2,2,2,2,2)))
+
+```
+
+## Rotor Drive Pressure (RDP)
+
+```{r}
+
+plotAsHarvest <- plotMap(map, bindedDF, "rdp", params$pc)
+
+plotDensity <- plotDens(
+  df = bindedDF, 
+  item = "rdp", 
+  pc = params$dpc, 
+  label = "Rotor Drive Pressure, mV")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(2,2,2,2,2,2),
+                                   c(2,2,2,2,2,2)))
+```
+
+## Propulsion Power (PP)
+
+```{r}
+
+plotAsHarvest <- plotMap(map, bindedDF, "pp", params$pc)
+
+plotDensity <- plotDens(
+  df = bindedDF, 
+  item = "pp", 
+  pc = params$dpc, 
+  label = "Propulsion Power, kW")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(2,2,2,2,2,2),
+                                   c(2,2,2,2,2,2)))
+```
+
+## Fuel Consumption vs Grain Productivity
+
+```{r}
+yLim <- densLimit(bindedDF, "fcih", params$dpc)
+xLim <- densLimit(bindedDF, "pro", params$dpc)
+
+ggplot(data = bindedDF, aes(x = pro, y = fcih, color = Source), size = 2) +
+  scale_x_continuous(limits = c(xLim$minZ[1], xLim$maxZ[1]), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(yLim$minZ[1], yLim$maxZ[1]), expand = c(0, 0)) +
+  geom_point( alpha=0.35) +
+  stat_density_2d(size = 1, contour = TRUE) +
+  onePlot() +
+  labs(x = "Grain Productivity, t/h", y = "Fuel Consumption, l/t")
+```
+
+## Overall Performance (OPSCORE)
+
+```{r}
+
+plotAsHarvest <- plotMap(map = map, 
+                         df = bindedDF, 
+                         item = "opscore", 
+                         pc = params$pc, 
+                         score = TRUE)
+  
+plotDensity <- plotDens(df = bindedDF, 
+                        item = "opscore",
+                        pc = params$dpc,
+                        label = "Overall Performance Score",
+                        score = TRUE) 
+
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(2,2,2,2,2,2),
+                                   c(2,2,2,2,2,2)))
+```
+
+## Grain Productivity (GPSCORE)
+
+```{r}
+
+plotAsHarvest <- plotMap(map = map, 
+                         df = bindedDF, 
+                         item = "gpscore", 
+                         pc = params$pc, 
+                         score = TRUE)
+
+plotDensity <- plotDens(df = bindedDF, 
+                        item = "gpscore",
+                        pc = params$dpc,
+                        label = "Grain Productivity Score",
+                        score = TRUE) 
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(2,2,2,2,2,2),
+                                   c(2,2,2,2,2,2)))
+```
+
+## Power Utilization Score (PUSCORE)
+
+```{r}
+
+plotAsHarvest <- plotMap(map = map, 
+                         df = bindedDF, 
+                         item = "puscore", 
+                         pc = params$pc, 
+                         score = TRUE)
+
+plotDensity <- plotDens(df = bindedDF, 
+                        item = "puscore",
+                        pc = params$dpc,
+                        label = "Power Utilization Score",
+                        score = TRUE) 
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(2,2,2,2,2,2),
+                                   c(2,2,2,2,2,2)))
+```
+
+## Fuel Economy Score (FESCORE)
+
+```{r}
+
+plotAsHarvest <- plotMap(map = map, 
+                         df = bindedDF, 
+                         item = "fescore", 
+                         pc = params$pc, 
+                         score = TRUE)
+
+plotDensity <- plotDens(df = bindedDF, 
+                        item = "fescore",
+                        pc = params$dpc,
+                        label = "Fuel Economy Score",
+                        score = TRUE) 
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(2,2,2,2,2,2),
+                                   c(2,2,2,2,2,2)))
+```
+
+
+```{r}
+# Convert GPS time to field time to prepare for Versatility Calculations
+
+harvDF$DateTime <- with(harvDF,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = params$tz)
+)
+
+simDF$DateTime <- with(simDF,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = params$tz)
+)
+
+
+harvDF$dateCode <-  strftime(harvDF$DateTime, format = "%Y-%m-%d" )
+simDF$dateCode <-  strftime(simDF$DateTime, format = "%Y-%m-%d" )
+
+```
+
+
+
+
+```{r}
+
+compDF <- data.frame(DateTime = harvDF$DateTime, pro = harvDF$pro, gpscore = harvDF$gpscore)
+compDF <- compDF %>% dplyr::group_by(DateTime) %>% dplyr::summarise_all(funs(median))
+compDF$Source <- harvDF$Source[1]
+compDF$dateCode <-  strftime(compDF$DateTime, format = "%Y-%m-%d" )
+
+simcompDF <- data.frame(DateTime = simDF$DateTime, pro = simDF$pro, gpscore = simDF$gpscore)
+simcompDF <- simcompDF %>% dplyr::group_by(DateTime) %>% dplyr::summarise_all(funs(median))
+simcompDF$Source <- simDF$Source[1]
+simcompDF$dateCode <-  strftime(simcompDF$DateTime, format = "%Y-%m-%d" )
+
+compDF <- rbind(compDF, simcompDF)
+
+compDF$field <- asHarvest$field[1]
+compDF$localtime <- compDF$DateTime
+```
+
+
+
+```{r title, results='asis', fig.width=8, fig.height=3}
+# The following are versatility table output and time vs metric plotting
+# The for-loops are used to create versatility pages for each unique date
+
+for( i in unique(harvDF$dateCode)){
+  cat("\\pagebreak")
+  
+  VersDF <- compDF %>% 
+    dplyr::filter(., dateCode == i)
+  VersDF$time <- VersDF$DateTime
+  VersDF$model_year <- unique(substr(asHarvest$serialnumber, 10, 10))
+  VersDF$model <- unique(substr(asHarvest$serialnumber, 4, 7))
+  VersDF$machine_name <- VersDF$Source
+  
+  p1 <- ggplot(VersDF, aes(x = DateTime, y = pro, colour = Source)) +
+    geom_smooth( method = "loess", method.args = list(degree = 2), size = 1.75, se = FALSE, span = 0.33) +
+    coord_cartesian(ylim=c(0, 100) + c(0,1)) +
+    timeTheme() +
+    labs(x = "Time", y = "Grain Productivity, t/h")
+  
+  # pandoc.header(paste("Grain Productivity", i, sep = " "), level=2)
+  
+  vtab <- get_versatility_tbl(unique(asHarvest$field)[1], "pro", VersDF)
+  
+  print(p1)
+  
+  cat(vtab[1], "\n")
+  cat(vtab[2], "\n")
+  
+  
+  
+}
+
+for( i in unique(harvDF$dateCode)){
+  cat("\\pagebreak")
+
+   VersDF <- compDF %>% 
+    dplyr::filter(., dateCode == i)
+  VersDF$time <- VersDF$DateTime
+  VersDF$model_year <- unique(substr(asHarvest$serialnumber, 10, 10))
+  VersDF$model <- unique(substr(asHarvest$serialnumber, 4, 7))
+  VersDF$machine_name <- VersDF$Source
+
+  p1 <- ggplot(VersDF, aes(x = DateTime, y = gpscore, colour = Source)) +
+    geom_smooth( method = "loess", method.args = list(degree = 2), size = 1.75, se = FALSE, span = 0.33) +
+    coord_cartesian(ylim=c(0, 100) + c(0,1)) +
+    timeTheme() +
+    labs(x = "Time", y = "Grain Productivity Score")
+  # pandoc.header(paste("As Harvest Grain Productivity Score", i, sep = " "), level=2)
+  vtab <- get_versatility_tbl(unique(asHarvest$field)[1], "gpscore", VersDF)
+
+  print(p1)
+
+  cat(vtab[1], "\n")
+  cat(vtab[2], "\n")
+
+
+  cat("\\pagebreak")
+
+
+}
+```

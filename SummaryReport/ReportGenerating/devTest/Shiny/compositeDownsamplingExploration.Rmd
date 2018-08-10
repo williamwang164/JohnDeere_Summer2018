@@ -1,0 +1,215 @@
+---
+title: "Composite Downsampling"
+author: "William Wang"
+date: "7/31/2018"
+output: html_document
+params:
+  pc: 0.8
+  dpc: 0.98
+  hFiles: NA
+  sFiles: NA
+  hNames: //iso19prod/IntelligentCombine/HA/ISE/reports/data/sfcVarMapping.csv
+  file1: //iso19prod/IntelligentCombine/HA/ISE/reports/data/results/Kuhburg/020-1_KUHBURG_WW-1Z0S685AKFM094700-HA.csv
+  file2: //iso19prod/IntelligentCombine/HA/ISE/reports/data/results/Kuhburg/020-1_KUHBURG_WW-1Z0S685AAFM094704-HA.csv
+  file3: //iso19prod/IntelligentCombine/HA/ISE/reports/data/results/Kuhburg/020-1_KUHBURG_WW-1Z0S685AVFM094684-HA.csv
+  path: '~/GitHub/SimToolChain/Merge/Kuhburg/WholeField/'
+  file4: 020-1_KUHBURG_WW-1Z0S685AKFM094700_MPC_EP90_PerfectPredictions_min-sim_processed.csv
+  file5: 020-1_KUHBURG_WW-1Z0S685AAFM094704_MPC_EP90_PerfectPredictions_min-sim_processed.csv
+  file6: 020-1_KUHBURG_WW-1Z0S685AVFM094684_MPC_EP90_PerfectPredictions_min-sim_processed.csv
+  file7: //iso19prod/IntelligentCombine/HA/ISE/reports/data/sfcVarMapping.csv
+  tz: "Canada/Central"
+---
+
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(comment=NA, echo=FALSE, warning=FALSE, message=FALSE)
+library(tidyverse)
+library(dbplyr)
+library(tinytex)
+library(colorRamps)
+library(knitr)
+library(kableExtra)
+library(gridExtra)
+library(grid)
+library(ggplot2)
+library(ggmap)
+library(ggpubr)
+library(scales)
+library(data.table)
+library(pander)
+source("src/compositeVersatility.R")
+source("src/plotUtil.R")
+source("src/tableUtil.R")
+
+```
+
+
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE, }
+# Read in files
+setwd(params$path)
+asHarvest        <- read.csv(params$file1, header = TRUE, as.is = TRUE)
+asHarvest        <- rbind(asHarvest, read.csv(params$file2, header = TRUE, as.is = TRUE))
+asHarvest        <- rbind(asHarvest, read.csv(params$file3, header = TRUE, as.is = TRUE))
+simulatedHarvest <- read.csv(params$file4, header = FALSE, as.is = TRUE)
+simulatedHarvest <- rbind(simulatedHarvest, read.csv(params$file5, header = FALSE, as.is = TRUE))
+simulatedHarvest <- rbind(simulatedHarvest, read.csv(params$file6, header = FALSE, as.is = TRUE))
+
+headerNames      <- read.csv(params$file7, header = TRUE)
+names(simulatedHarvest) <- headerNames$AWS
+
+
+asHarvest        <- mutate(asHarvest, Source = "As Harvested")
+simulatedHarvest <- mutate(simulatedHarvest, Source = "Simulated")
+asHarvest[["time"]] <- NULL
+asHarvest[["Index"]] <- NULL
+
+# tidy the data before merging
+
+asHarvest$hwu <- with(asHarvest, ifelse(is.na(hwu), hwi, hwu))
+
+
+bindedDF  <- rbind(asHarvest, simulatedHarvest)
+```
+
+
+```{r}
+
+model <- bindedDF$serialnumber %>% unique(.) %>% substr(., 4, 7) %>% unique(.)
+
+maxPower <- case_when(
+  model == "S660" ~ 249,
+  model == "S670" ~ 292,
+  model == "S680" ~ 353,
+  model == "S685" ~ 373,
+  model == "S690" ~ 405,
+  TRUE ~ as.numeric(NA)
+)
+
+bindedDF <- bindedDF %>%
+  mutate(., pu = ep/maxPower * 100)
+```
+
+```{r}
+bindedDF <- bindedDF %>% dplyr::filter(., ms == 4 | ms == 5)
+```
+
+```{r}
+# Prepare separate dfs for plots
+simDF <- bindedDF %>% dplyr::filter(Source == "Simulated")
+harvDF <- bindedDF %>% dplyr::filter(Source == "As Harvested")
+```
+
+```{r}
+minX <- with(bindedDF, min(lon, na.rm = TRUE))
+maxX <- with(bindedDF, max(lon, na.rm = TRUE))
+minY <- with(bindedDF, min(lat, na.rm = TRUE))
+maxY <- with(bindedDF, max(lat, na.rm = TRUE))
+
+minX <- round(minX, 4) - 0.0001
+maxX <- round(maxX, 4) + 0.0001
+minY <- round(minY, 4) - 0.0001
+maxY <- round(maxY, 4) + 0.0001
+
+```
+
+```{r}
+# Calculate Zoom
+bindedDFZoom <- calc_zoom(lon, lat, bindedDF) - 1
+
+# Calculate Center of path
+bindedDFlon <- (max(bindedDF$lon) + min(bindedDF$lon))/2
+bindedDFlat <- (max(bindedDF$lat) + min(bindedDF$lat))/2
+
+# Get The Maps
+map <-
+  get_map(location = c(lon = bindedDFlon, lat = bindedDFlat),
+          zoom = bindedDFZoom, maptype = "satellite")
+
+bindedDFscale <-
+  data.frame(lat = c(min(bindedDF$lat), max(bindedDF$lat)),
+             lon = c(min(bindedDF$lon), max(bindedDF$lon)))
+
+
+```
+
+### Without Downsampling
+
+```{r}
+plotAsHarvest <- plotMap(map, bindedDF, "pro", params$pc)
+
+plotDensity <- plotDens(
+  df = bindedDF, 
+  item = "pro", 
+  pc = params$dpc, 
+  label = "Grain Productivity, t/h")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(2,2,2,2,2,2),
+                                   c(2,2,2,2,2,2)))
+
+```
+
+
+### Median: Precision = Seconds
+
+```{r}
+# Convert GPS time to field time to prepare for Versatility Calculations
+
+harvDF$DateTime <- with(harvDF,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = params$tz)
+)
+
+simDF$DateTime <- with(simDF,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = params$tz)
+)
+
+
+harvDF$dateCode <-  strftime(harvDF$DateTime, format = "%Y-%m-%d" )
+harvDF$hourMin <- strftime(harvDF$DateTime, format = "%Y-%m-%d-%H-%M")
+simDF$dateCode <-  strftime(simDF$DateTime, format = "%Y-%m-%d" )
+simDF$hourMin <- strftime(simDF$DateTime, format = "%Y-%m-%d-%H-%M")
+```
+
+
+```{r}
+
+compDF <- data.frame(DateTime = harvDF$DateTime, pro = harvDF$pro, gpscore = harvDF$gpscore, lon = harvDF$lon, lat = harvDF$lat)
+compDF <- compDF %>% dplyr::group_by(DateTime) %>% dplyr::summarise_all(funs(median))
+compDF$Source <- harvDF$Source[1]
+
+simcompDF <- data.frame(DateTime = simDF$DateTime, pro = simDF$pro, gpscore = simDF$gpscore, lon = simDF$lon, lat = simDF$lat)
+simcompDF <- simcompDF %>% dplyr::group_by(DateTime) %>% dplyr::summarise_all(funs(median))
+simcompDF$Source <- simDF$Source[1]
+
+compDF <- rbind(compDF, simcompDF)
+```
+
+```{r}
+plotAsHarvest <- plotMap(map, compDF, "pro", params$pc)
+
+plotDensity <- plotDens(
+  df = compDF, 
+  item = "pro", 
+  pc = params$dpc, 
+  label = "Grain Productivity, t/h")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(2,2,2,2,2,2),
+                                   c(2,2,2,2,2,2)))
+
+```
+
+
+
+
+
+

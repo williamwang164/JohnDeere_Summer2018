@@ -1,0 +1,801 @@
+---
+output:
+  pdf_document:
+    includes:
+      in_header: header.tex
+    fig_width: 25
+    fig_height: 25
+classoption: landscape
+geometry: margin=2cm
+params:
+  pc: 0.8
+  file1: //iso19prod/IntelligentCombine/HA/ISE/reports/data/020-1_KUHBURG_WW-1Z0S685AAFM094704-HA1.csv
+  path: '~/GitHub/SimToolChain/Merge/MergeOutput'
+  file2: 020-1_KUHBURG_WW-1Z0S685AAFM094704-HA-sim_linear_processed.csv
+  file3: //iso19prod/IntelligentCombine/HA/ISE/reports/data/sfcVarMapping.csv
+---
+
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(comment=NA, echo=FALSE, warning=FALSE, message=FALSE)
+library(tidyverse)
+library(dbplyr)
+library(tinytex)
+library(colorRamps)
+library(knitr)
+library(gridExtra)
+library(grid)
+library(ggplot2)
+library(ggmap)
+library(ggpubr)
+library(scales)
+library(data.table)
+
+source("src/versatility.R")
+
+densTheme <- function(base_size = 20){
+  theme(
+    axis.line =         element_blank(),
+    axis.text.x =       element_text(size = base_size, lineheight = 0.9, vjust = 1),
+    axis.text.y =       element_text(size = base_size, lineheight = 0.9, hjust = 1),
+    axis.ticks =        element_line(colour = "black", size = 0.2),
+    axis.title.x =      element_text(size = base_size, vjust = 1),
+    axis.title.y =      element_text(size = base_size, angle = 90, vjust = 0.5),
+    axis.ticks.length = unit(0.3, "lines"),
+    axis.ticks.margin = unit(0.5, "lines"),
+ 
+    legend.background = element_rect(colour=NA), 
+    legend.key =        element_rect(colour = "grey80"),
+    legend.key.size =   unit(1.2, "lines"),
+    legend.text =       element_text(size = base_size),
+    legend.title =      element_blank(),
+    legend.position =   "right",
+ 
+    panel.background =  element_rect(fill = "white", colour = NA), 
+    panel.border =      element_rect(fill = NA, colour="grey50"), 
+    panel.grid.major =  element_line(colour = "grey90", size = 0.2),
+    panel.grid.minor =  element_line(colour = "grey98", size = 0.5),
+    panel.margin =      unit(0.25, "lines"),
+ 
+    strip.background =  element_rect(fill = "grey80", colour = "grey50"), 
+    strip.text.x =      element_text(size = base_size * 0.8),
+    strip.text.y =      element_text(size = base_size * 0.8, angle = -90),
+ 
+    plot.background =   element_rect(colour = NA),
+    plot.title =        element_text(size = base_size * 1.2),
+    plot.margin =       unit(c(1, 1, 0.5, 0.5), "lines")
+  )
+}
+```
+
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE, }
+##########Read in files##########
+setwd(params$path)
+asHarvest        <- read.csv(params$file1, header = TRUE, as.is = TRUE)
+simulatedHarvest <- read.csv(params$file2, header = FALSE, as.is = TRUE)
+headerNames      <- read.csv(params$file3, header = TRUE)
+
+##########Put Header names in##########
+# names(asHarvest)        <- headerNames$AWS
+names(simulatedHarvest) <- headerNames$AWS
+
+
+asHarvest        <- mutate(asHarvest, Source = "As Harvested")
+simulatedHarvest <- mutate(simulatedHarvest, Source = "Simulated")
+asHarvest[["time"]] <- NULL
+asHarvest[["Index"]] <- NULL
+
+# tidy the data before merging
+
+asHarvest$hwu <- with(asHarvest, ifelse(is.na(hwu), hwi, hwu))
+
+
+bindedDF  <- rbind(asHarvest, simulatedHarvest)
+```
+
+```{r}
+#######################################
+#########Preparing Calculations########
+#######################################
+
+model <- bindedDF$serialnumber %>% unique(.) %>% substr(., 4, 7)
+
+maxPower <- case_when(
+  model == "S660" ~ 249,
+  model == "S670" ~ 292,
+  model == "S680" ~ 353,
+  model == "S685" ~ 373,
+  model == "S690" ~ 405,
+  TRUE ~ as.numeric(NA)
+)
+
+bindedDF <- bindedDF %>%
+  mutate(., pu = ep/maxPower * 100)
+```
+
+```{r}
+#######################################
+#########Preparing the Tables##########
+#######################################
+```
+```{r, comment=NA, echo=FALSE, warning=FALSE, message=FALSE}
+#Harvest Performance Scores (AKA HPS)
+#  overall performance, grain productivity, power utalization, fuel Economy, grain
+#  saving
+
+hpsTable <-
+  bindedDF %>% dplyr::filter(ms == 4 | ms == 5) %>% dplyr::group_by(Source) %>% dplyr::summarise(
+    Performance = mean(opscore, na.rm = TRUE),
+    Productivity = mean(gpscore, na.rm = TRUE),
+    Power = mean(puscore, na.rm = TRUE),
+    Fuel = mean(fescore, na.rm = TRUE),
+    Grain = mean(glscore, na.rm = TRUE)
+  )
+
+#Harvesting Performance - Engineering Units (AKA HPEU)
+# Grain Prod, Power Util, Fuel Econ, Total Loss
+
+hpeuTable <-
+  bindedDF %>%
+  dplyr::filter(ms == 4 | ms == 5) %>%
+  dplyr::group_by(Source) %>%
+  dplyr::summarise(
+    GrainProd = mean(pro, na.rm = TRUE),
+    PowerUtil = mean(pu, na.rm = TRUE),
+    FuelEcon = mean(fcih, na.rm = TRUE)
+  )
+
+#Power Summary (AKA PS)
+# Engine Harv, Eng Harv and UL, Avg Harv Specific Pwr, Propulsion Power
+psTable <-
+  bindedDF %>%
+  dplyr::filter(ms == 4 | ms == 5 ) %>%
+  dplyr::group_by(Source) %>%
+  dplyr::summarise(
+    EngineHarv = mean(ep, na.rm = TRUE),
+    EngineHarvUL = mean(ep, na.rm = TRUE),
+    AvgHarvSpecificPwr = mean(ifelse(pro == 0, NA, ep/pro), na.rm = TRUE),
+    PropulsionPower = mean(pp, na.rm = TRUE)
+  )
+
+engineHarvesting <- bindedDF %>%
+  dplyr::filter(ms == 5) %>%
+  dplyr::group_by(Source) %>%
+  dplyr::summarise(EngineHarv = mean(ep, na.rm = TRUE))
+
+psTable$EngineHarv <- engineHarvesting$EngineHarv
+
+# agronomic and output summary (AKA AOS)
+# Avg Harvest Speed, Harv Area, Avg Yield
+aosTable <-
+  bindedDF %>% 
+  dplyr::filter(ms == 4 | ms == 5) %>% 
+  dplyr::group_by(Source) %>% 
+  dplyr::summarize(
+    HarvestSpeed = mean(gpssp, na.rm = TRUE),
+    HarvestArea = sum(gpssp * pmin(hwu, hwi, na.rm = TRUE) / 36000, na.rm = TRUE),
+    AvgYield = mean(yield, na.rm = TRUE)
+  )
+
+############################################
+#       Rename the tables                  #
+#   Rename row names to source             #
+#   Rename the col names to proper titles  #
+############################################
+row.names(hpsTable) <- hpsTable$Source
+hpsTable$Source <- NULL
+  names(hpsTable) <- c("Overall Performance", "Grain Productivity", "Power Utilization", "Fuel Economy", "Grain Saving")
+
+
+row.names(hpeuTable) <- hpeuTable$Source
+hpeuTable$Source <- NULL
+names(hpeuTable) <- c("Grain Prod (t/h)", "Power Utl (%)", "Fuel Econ (1/t)")
+
+
+row.names(psTable) <- psTable$Source
+psTable$Source <- NULL
+names(psTable) <- c("Engine Harv (kW)", "Eng Harv & Utl (kW)", "Avg Harv Specific Pwr (kW/t/h)", "Propulsion Power (kW)")
+
+
+row.names(aosTable) <- aosTable$Source
+aosTable$Source <- NULL
+names(aosTable) <- c("Avg Harvest Speed (km/h)", "Harv Area (ha)", "Avg Yield (t/ha)")
+
+```
+
+# Overall Performance Summary
+
+## Field Harvesting Performance Summary
+
+### Harvesting Performance Scores
+
+```{r, results = "asis"}
+kable(round(hpsTable, digits = 0), "latex", booktabs = TRUE)
+```
+
+### Harvesting Performance - Engineering Units
+
+```{r, results = "asis"}
+
+kable(round(hpeuTable, digits = 1),"latex", booktabs = TRUE)
+```
+
+### Power Summary
+
+```{r, results = "asis"}
+kable(round(psTable, digits = 0), "latex", booktabs = TRUE)
+```
+
+### Agronomic & Output Summary
+
+```{r, results = "asis"}
+kable(round(aosTable, digits = 1), "latex", booktabs = TRUE)
+```
+
+```{r}
+
+bindedDF <- bindedDF %>% dplyr::filter(., ms == 4 | ms == 5)
+```
+
+```{r}
+minX <- with(bindedDF, min(lon, na.rm = TRUE))
+maxX <- with(bindedDF, max(lon, na.rm = TRUE))
+minY <- with(bindedDF, min(lat, na.rm = TRUE))
+maxY <- with(bindedDF, max(lat, na.rm = TRUE))
+
+minX <- round(minX, 4) - 0.0001
+maxX <- round(maxX, 4) + 0.0001
+minY <- round(minY, 4) - 0.0001
+maxY <- round(maxY, 4) + 0.0001
+
+```
+
+
+
+```{r}
+# Calculate Zoom
+bindedDFZoom <- calc_zoom(lon, lat, bindedDF) - 1
+
+# Calculate Center of path
+bindedDFlon <- (max(bindedDF$lon) + min(bindedDF$lon))/2
+bindedDFlat <- (max(bindedDF$lat) + min(bindedDF$lat))/2
+
+# Get The Maps
+map <-
+  get_map(location = c(lon = bindedDFlon, lat = bindedDFlat),
+          zoom = bindedDFZoom, maptype = "satellite")
+
+bindedDFscale <-
+  data.frame(lat = c(min(bindedDF$lat), max(bindedDF$lat)),
+             lon = c(min(bindedDF$lon), max(bindedDF$lon)))
+
+
+```
+
+## Harvesting Ground Speed (GPSSP)
+
+```{r}
+
+minZ   <- with(bindedDF, quantile(gpssp, 1 - params$pc, na.rm = TRUE))
+maxZ   <- with(bindedDF, quantile(gpssp, params$pc, na.rm = TRUE))
+
+bindedDF$gpssp2 <- with(bindedDF, ifelse(gpssp < minZ, minZ, gpssp))
+bindedDF$gpssp2 <- with(bindedDF, ifelse(gpssp2 > maxZ, maxZ, gpssp2))
+
+plotAsHarvest <- ggmap(map) +
+  geom_point(data = bindedDF, aes(x = lon, y = lat, colour = gpssp2)) +
+  scale_colour_gradientn(
+    limits = c(minZ-1, maxZ+1),
+    colours = matlab.like(64),
+    guide = guide_colorbar(barwidth = unit(0.45, "npc"))
+  ) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~ Source) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 20),
+        axis.ticks = element_blank(),
+        axis.text  = element_blank(),
+        axis.title = element_blank(),
+        strip.text.x = element_text(size = 40, face = "bold"))
+
+
+
+
+plotDensity <- ggplot(data = bindedDF) +
+  geom_density(aes(x = gpssp, color = Source), size = 2) +
+  densTheme() +
+  labs(x = "Ground Speed, kph")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(3,3,3,3,3,3),
+                                   c(3,3,3,3,3,3)))
+
+```
+
+## Grain Productivity (PRO)
+
+```{r}
+minZ   <- with(bindedDF, quantile(pro, 1 - params$pc, na.rm = TRUE))
+maxZ   <- with(bindedDF, quantile(pro, params$pc, na.rm = TRUE))
+
+bindedDF$pro2 <- with(bindedDF, ifelse(pro < minZ, minZ, pro))
+bindedDF$pro2 <- with(bindedDF, ifelse(pro2 > maxZ, maxZ, pro2))
+
+plotAsHarvest <-
+  ggmap(map) +
+  geom_point(data = bindedDF, aes(x = lon, y = lat, colour = pro2)) +
+  scale_colour_gradientn(limits = c(minZ, maxZ),
+                         colours = matlab.like(64),
+                         guide = guide_colorbar(barwidth = unit(.45, "npc"))) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~ Source) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 20),
+        axis.ticks = element_blank(),
+        axis.text  = element_blank(),
+        axis.title = element_blank(),
+        strip.text.x = element_text(size = 40, face = "bold"))
+
+plotDensity <- ggplot(data = bindedDF) +
+  geom_density( aes(x = pro, color = Source), size = 2) +
+  densTheme() +
+  labs( x = "Grain Productivity, t/h")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(3,3,3,3,3,3),
+                                   c(3,3,3,3,3,3)))
+
+```
+
+## Power Utilization (100 * EP/MaxPower)
+
+```{r}
+
+minZ   <- with(bindedDF, quantile(pu, 1 - params$pc, na.rm = TRUE))
+maxZ   <- with(bindedDF, quantile(pu, params$pc, na.rm = TRUE))
+
+bindedDF$pu2 <- with(bindedDF, ifelse(pu < minZ, minZ, pu))
+bindedDF$pu2 <- with(bindedDF, ifelse(pu2 > maxZ, maxZ, pu2))
+
+plotAsHarvest <-
+  ggmap(map) +
+  geom_point(data = bindedDF, aes(x = lon, y = lat, colour = pu2)) +
+  scale_colour_gradientn(limits = c(minZ, maxZ),
+                         colours = matlab.like(64),
+                         guide = guide_colorbar(barwidth = unit(.45, "npc"))) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~ Source) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 20),
+        axis.ticks = element_blank(),
+        axis.text  = element_blank(),
+        axis.title = element_blank(),
+        strip.text.x = element_text(size = 40, face = "bold"))
+
+plotDensity <- ggplot(data = bindedDF) +
+  geom_density( aes(x = pu, color = Source), size = 2) +
+  densTheme() +
+  labs( x = "Power Utilization, %")
+
+
+
+
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(3,3,3,3,3,3),
+                                   c(3,3,3,3,3,3)))
+```
+
+## Fuel Consumption (FCIH <= 10)
+
+```{r}
+
+asfcihFrame <- dplyr::filter(asHarvest, fcih <= 10)
+simfcihFrame <- dplyr::filter(simulatedHarvest, fcih <= 10)
+
+minZ   <-  bindedDF %>%
+  dplyr::filter(fcih <= 10) %>%
+  with( quantile(fcih, 1 - params$pc, na.rm = TRUE))
+maxZ   <- bindedDF %>%
+  dplyr::filter(fcih <= 10) %>%
+  with( quantile(fcih, params$pc, na.rm = TRUE))
+
+plotAsHarvest <-
+  ggmap(map) +
+  geom_point(data = bindedDF,aes(x = lon, y = lat, colour = fcih)) +
+  scale_colour_gradientn(limits = c(minZ, maxZ),
+                         colours = matlab.like(64),
+                         guide = guide_colorbar(barwidth = unit(.45, "npc"))) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~ Source) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 20),
+        axis.ticks = element_blank(),
+        axis.text  = element_blank(),
+        axis.title = element_blank(),
+        strip.text.x = element_text(size = 40, face = "bold"))
+
+plotDensity <- dplyr::filter(bindedDF, !is.na(fcih) & fcih <= 10) %>%
+  ggplot() +
+  geom_density( aes(x = fcih, color = Source), size = 2) +
+  densTheme() +
+  labs(x = "Fuel Consumption 1/t")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(3,3,3,3,3,3),
+                                   c(3,3,3,3,3,3)))
+
+```
+
+## Rotor Drive Pressure (RDP)
+
+```{r}
+
+minZ   <- with(bindedDF, quantile(rdp, 1 - params$pc, na.rm = TRUE))
+maxZ   <- with(bindedDF, quantile(rdp, params$pc, na.rm = TRUE))
+
+bindedDF$rdp2 <- with(bindedDF, ifelse(rdp < minZ, minZ, rdp))
+bindedDF$rdp2 <- with(bindedDF, ifelse(rdp2 > maxZ, maxZ, rdp2))
+
+plotAsHarvest <-
+  ggmap(map) +
+  geom_point(data = bindedDF,aes(x = lon, y = lat, colour = rdp2)) +
+  scale_colour_gradientn(limits = c(minZ, maxZ),
+                         colours = matlab.like(64),
+                         guide = guide_colorbar(barwidth = unit(.45, "npc"))) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~ Source) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 20),
+        axis.ticks = element_blank(),
+        axis.text  = element_blank(),
+        axis.title = element_blank(),
+        strip.text.x = element_text(size = 40, face = "bold"))
+
+plotDensity <- ggplot(data = bindedDF) + geom_density( aes(x = rdp, color = Source), size = 2) +
+ densTheme() +
+  labs(x = "Rotor Drive Pressure, mV")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(3,3,3,3,3,3),
+                                   c(3,3,3,3,3,3)))
+```
+
+## Propulsion Power (PP)
+
+```{r}
+minZ   <- with(bindedDF, quantile(pp, 1 - params$pc, na.rm = TRUE))
+maxZ   <- with(bindedDF, quantile(pp, params$pc, na.rm = TRUE))
+
+bindedDF$pp2 <- with(bindedDF, ifelse(pp < minZ, minZ, pp))
+bindedDF$pp2 <- with(bindedDF, ifelse(pp2 > maxZ, maxZ, pp2))
+
+
+plotAsHarvest <-
+  ggmap(map) +
+  geom_point(data = bindedDF ,aes(x = lon, y = lat, colour = pp2)) +
+  scale_colour_gradientn(limits = c(minZ, maxZ),
+                         colours = matlab.like(64),
+                         guide = guide_colorbar(barwidth = unit(.45, "npc"))) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~ Source) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 20),
+        axis.ticks = element_blank(),
+        axis.text  = element_blank(),
+        axis.title = element_blank(),
+        strip.text.x = element_text(size = 40, face = "bold"))
+
+
+plotDensity <- ggplot(data = bindedDF) + geom_density( aes(x = pp, color = Source), size = 2) +
+  densTheme() +
+  labs(x = "Propulsion Power, kW")
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(3,3,3,3,3,3),
+                                   c(3,3,3,3,3,3)))
+```
+
+## Fuel Consumption vs Grain Productivity
+
+```{r}
+bindedDF %>%
+  #filter(., !is.na(pro) & !is.na(fescore) ) %>%
+  dplyr::filter(., fcih <= 10) %>%
+  ggplot(data = ., aes(x = pro, y = fcih, color = Source), size = 2) +
+  geom_point( alpha=0.35) +
+  stat_density_2d(size = 1, contour = TRUE) +
+  theme(
+        panel.background =  element_rect(fill = "white", colour = NA), 
+        panel.border =      element_rect(fill = NA, colour="grey50"), 
+        panel.grid.major =  element_line(colour = "grey90", size = 0.2),
+        panel.grid.minor =  element_line(colour = "grey98", size = 0.5),
+        panel.margin =      unit(0.25, "lines") 
+  ) +
+  labs(x = "Grain Productivity, t/h", y = "Fuel Consumption, l/t")
+```
+
+## Overall Performance (OPSCORE)
+
+```{r}
+minZ   <- 0
+maxZ   <- 100
+
+plotAsHarvest <-
+  ggmap(map) +
+  geom_point(data = bindedDF,aes(x = lon, y = lat, colour = opscore)) +
+  scale_colour_gradientn(limits = c(minZ, maxZ),
+                         colours = matlab.like(64),
+                         guide = guide_colorbar(barwidth = unit(.45, "npc"))) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~ Source) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 20),
+        axis.ticks = element_blank(),
+        axis.text  = element_blank(),
+        axis.title = element_blank(),
+        strip.text.x = element_text(size = 40, face = "bold"))
+
+
+plotDensity <- ggplot(data = bindedDF) +
+  geom_density( aes(x = opscore, color = Source), size = 2) +
+  densTheme() +
+  labs(x = "Overall Performance Score") +
+  scale_x_continuous(limits = c(minZ, maxZ) )
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(3,3,3,3,3,3),
+                                   c(3,3,3,3,3,3)))
+```
+
+## Grain Productivity (GPSCORE)
+```{r}
+
+# minZ   <- with(bindedDF, quantile(gpscore, 1 - params$pc, na.rm = TRUE))
+# maxZ   <- with(bindedDF, quantile(gpscore, params$pc, na.rm = TRUE))
+
+plotAsHarvest <-
+  ggmap(map) +
+  geom_point(data = bindedDF,aes(x = lon, y = lat, colour = gpscore)) +
+  scale_colour_gradientn(limits = c(minZ, maxZ),
+                         colours = matlab.like(64),
+                         guide = guide_colorbar(barwidth = unit(.45, "npc"))) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~ Source) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 20),
+        axis.ticks = element_blank(),
+        axis.text  = element_blank(),
+        axis.title = element_blank(),
+        strip.text.x = element_text(size = 40, face = "bold"))
+
+
+plotDensity <- ggplot(data = bindedDF) +
+  geom_density(aes(x = gpscore, color = Source), size = 2) +
+  densTheme() +
+  labs(x = "Grain Productivity Score") +
+  scale_x_continuous(limits = c(minZ, maxZ) )
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(3,3,3,3,3,3),
+                                   c(3,3,3,3,3,3)))
+```
+
+## Power Utilization Score (PUSCORE)
+```{r}
+
+# minZ   <- with(bindedDF, quantile(puscore, 1 - params$pc, na.rm = TRUE))
+# maxZ   <- with(bindedDF, quantile(puscore, params$pc, na.rm = TRUE))
+
+plotAsHarvest <-
+  ggmap(map) +
+  geom_point(data = bindedDF,aes(x = lon, y = lat, colour = puscore)) +
+  scale_colour_gradientn(limits = c(minZ, maxZ),
+                         colours = matlab.like(64),
+                         guide = guide_colorbar(barwidth = unit(.45, "npc"))) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~ Source) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 20),
+        axis.ticks = element_blank(),
+        axis.text  = element_blank(),
+        axis.title = element_blank(),
+        strip.text.x = element_text(size = 40, face = "bold"))
+
+
+plotDensity <- ggplot(data = bindedDF) +
+  geom_density( aes(x = puscore, color = Source), size = 2) +
+  densTheme() +
+  labs(x = "Power Utilization Score") +
+  scale_x_continuous(limits = c(minZ, maxZ) )
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(3,3,3,3,3,3),
+                                   c(3,3,3,3,3,3)))
+```
+
+## Fuel Economy Score (FESCORE)
+
+```{r}
+
+plotAsHarvest <-
+  ggmap(map) +
+  geom_point(data = bindedDF,aes(x = lon, y = lat, colour = fescore)) +
+  scale_colour_gradientn(limits = c(minZ, maxZ),
+                         colours = matlab.like(64),
+                         guide = guide_colorbar(barwidth = unit(.45, "npc"))) +
+  scale_x_continuous(limits = c(minX, maxX), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(minY, maxY), expand = c(0, 0)) +
+  facet_wrap(~ Source) +
+  theme(legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 20),
+        axis.ticks = element_blank(),
+        axis.text  = element_blank(),
+        axis.title = element_blank(),
+        strip.text.x = element_text(size = 40, face = "bold"))
+
+
+
+plotDensity <- ggplot(data = bindedDF) +
+  geom_density(aes(x = fescore, color = Source), size = 2) +
+  densTheme() +
+  labs(x = "Fuel Economy Score") +
+  scale_x_continuous(limits = c(minZ, maxZ) )
+
+grid.arrange(plotAsHarvest,
+             plotDensity,
+             layout_matrix = rbind(c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(1,1,1,1,1,1),
+                                   c(3,3,3,3,3,3),
+                                   c(3,3,3,3,3,3)))
+```
+
+```{r}
+df <- asHarvest
+df$Source <- "As Harvested"
+df$DateTime <- with(df,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = "Canada/Central")
+)
+
+df2 <- simulatedHarvest
+df2$Source <- "Simulated"
+df2$DateTime <- with(df2,
+  .POSIXct(ISOdatetime(gpsy, gpsm, gpsd, gpsh, gpsmi, gpss, tz = "UTC"), tz = "Canada/Central")
+)
+# df2 <- simulatedHarvest
+# df2$Source <- "Simulated"
+# df2$DateTime <- df2$myjduserid
+
+df <- rbind(df, df2)
+
+df <- df %>% dplyr::filter(., ms == 4 | ms == 5)
+```
+
+
+```{r, fig.width=8, fig.height=3}
+# Grain Productivity vs Time plot
+ggplot(df, aes(x = DateTime, y = pro, colour = Source)) +
+  geom_smooth( method = "loess", method.args = list(degree = 2), size = 1.75, se = FALSE, span = 0.33) +
+  coord_cartesian(ylim=c(0, 100) + c(0,1)) +
+  theme(
+    panel.background =  element_rect(fill = "white", colour = NA), 
+    panel.border =      element_rect(fill = NA, colour="grey50"), 
+    panel.grid.major =  element_line(colour = "grey90", size = 0.2),
+    panel.grid.minor =  element_line(colour = "grey98", size = 0.5),
+    panel.margin =      unit(0.25, "lines") 
+  )
+  
+```
+
+
+```{r, results = 'asis'}
+# Grain Productivity Versatility Table
+
+VersDF <- df
+colnames(VersDF)[which(names(VersDF) == "Source")] <- "machine_name"
+VersDF$time <- VersDF$DateTime
+VersDF$localtime <- VersDF$DateTime
+VersDF$model_year <- substr(VersDF$serialnumber, 10, 10)
+VersDF$model <- VersDF$serialnumber %>% substr(., 4, 7)
+
+vtab <- get_versatility_tbl("TABIN", "pro", VersDF)
+
+cat(vtab[1], "\n")
+cat(vtab[2], "\n")
+
+```
+
+
+```{r, fig.width=8, fig.height=3}
+# Productivity Score vs Time plot
+ggplot(df, aes(x = DateTime, y = gpscore, colour = Source)) +
+  geom_smooth( method = "loess", method.args = list(degree = 2), size = 1.75, se = FALSE, span = 0.33) +
+  coord_cartesian(ylim=c(0, 100) + c(0,1)) +
+  theme(
+    panel.background =  element_rect(fill = "white", colour = NA), 
+    panel.border =      element_rect(fill = NA, colour="grey50"), 
+    panel.grid.major =  element_line(colour = "grey90", size = 0.2),
+    panel.grid.minor =  element_line(colour = "grey98", size = 0.5),
+    panel.margin =      unit(0.25, "lines") 
+    )
+
+```
+
+
+```{r, results = 'asis'}
+VersDF <- df
+colnames(VersDF)[which(names(VersDF) == "Source")] <- "machine_name"
+VersDF$time <- VersDF$DateTime
+VersDF$model_year <- substr(VersDF$serialnumber, 10, 10)
+VersDF$model <- VersDF$serialnumber %>% substr(., 4, 7)
+
+vtab <- get_versatility_tbl("TABIN", "gpscore", VersDF)
+
+cat(vtab[1], "\n")
+cat(vtab[2], "\n")
+```
